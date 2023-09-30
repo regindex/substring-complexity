@@ -61,7 +61,7 @@ int main(int argc, char* argv[])
 
     cout << endl << "k\td_k\td_k/k" << endl;
 
-    for(int i=1;i<min(50,int(dk.size()));++i) 
+    for(int i=1;i<min(100,int(dk.size()));++i) 
     	cout << i << "\t" << dk[i] << "\t" << double(dk[i])/i << endl;
 
 }
