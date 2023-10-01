@@ -14,48 +14,54 @@ using namespace sdsl;
 
 int main(int argc, char* argv[])
 {
-    if (argc < 2) {
-        cout << "Usage: " << argv[0] << " file" << endl;
+    if (argc < 2 or argc > 3) {
+        cout << "Usage: " << argv[0] << " <file> [N]" << endl;
+        cout << "where <file> contains the input string and N is the number of delta_k values to print (default: 0)" << endl;
         return 1;
     }
     string file = argv[1];
+    uint64_t N = 0;
+
+    if(argc==3) N = atoi(argv[2]);
 
 	cache_config cc(true); // delete temp files after lcp construction
     lcp_wt<> lcp;
     construct(lcp, file, 1);
 
-    vector<int64_t> dk(lcp.size(),0);
+    //NOTE: use wider integers on very large files
+    vector<uint32_t> dk(lcp.size(),0);
 
-    //cout << "sa = "; for(auto x:csa) cout << x << " "; cout << endl;
     //cout << "lcp = "; for(auto x:lcp) cout << x << " "; cout << endl;
 
     dk[1]++; //this is dk[lcp[0]+1]++
 
-    for(uint64_t i=1;i<lcp.size();++i){
+    for(uint64_t i=1;i<lcp.size();++i)
     	dk[lcp[i]+1]++; // let lcp[i]=k. Here we see a new factor of length k+1, k+2, k+3, ...
-    	dk[i]--; // all suffixes of length <= i (ended by $) create a spurious distinct factor of length i
-    }
-
-    for(uint64_t i=1;i<dk.size();++i) dk[i] += dk[i-1];
-    
+    					// note: "spurious" factors of length <=i contining a $ will be removed in the next loop
+        
     double delta = 0;
-	double argmax = 0;
+	double delta_i = 0;
+	double dk_value = 0;
+	uint64_t argmax = 0;
+
+	if(N>0) cout << endl << "k\td_k\td_k/k" << endl;
 
     for(uint64_t i=1;i<dk.size();++i){
 
-    	if(double(dk[i])/i>delta) argmax = i;
+    	dk_value = dk_value + dk[i] - 1;
+		delta_i = dk_value/i;
 
-    	delta = max(delta, double(dk[i])/i);
+    	if(delta_i>delta){
+    		argmax = i;
+			delta = delta_i;
+		}
+
+		if(i<=N) cout << i << "\t" << dk_value << "\t" << delta_i << endl;
 
     }
 
 
-    cout << "delta = " << delta << endl; 
+    cout << "\ndelta = " << delta << endl; 
     cout << "argmax_k(d_k/k) = " << argmax << endl; 
-
-    cout << endl << "k\td_k\td_k/k" << endl;
-
-    for(int i=1;i<min(100,int(dk.size()));++i) 
-    	cout << i << "\t" << dk[i] << "\t" << double(dk[i])/i << endl;
 
 }
