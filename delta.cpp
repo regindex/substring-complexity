@@ -60,8 +60,9 @@ int main(int argc, char* argv[])
 
     }
 
+	if(N>0) cout << endl;
 
-    cout << "\ndelta = " << delta << endl; 
+    cout << "delta = " << delta << endl; 
     cout << "argmax_k(d_k/k) = " << argmax << endl; 
 
 }
