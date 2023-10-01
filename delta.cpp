@@ -20,11 +20,7 @@ int main(int argc, char* argv[])
     }
     string file = argv[1];
 
-    cache_config cc(false); // do not delete temp files after csa construction
-    csa_wt<> csa;
-    construct(csa, file, 1);
-
-    cc.delete_files = true; // delete temp files after lcp construction
+	cache_config cc(true); // delete temp files after lcp construction
     lcp_wt<> lcp;
     construct(lcp, file, 1);
 
@@ -33,14 +29,12 @@ int main(int argc, char* argv[])
     //cout << "sa = "; for(auto x:csa) cout << x << " "; cout << endl;
     //cout << "lcp = "; for(auto x:lcp) cout << x << " "; cout << endl;
 
-    for(uint64_t i=0;i<csa.size();++i){
-    
-    	dk[lcp[i]+1]++;
-    	if(csa[i]>0) dk[csa.size()-csa[i]+1]--;
-    
-    }
+    dk[1]++; //this is dk[lcp[0]+1]++
 
-    dk[1]--;// discard all kmers containing string terminator $
+    for(uint64_t i=1;i<lcp.size();++i){
+    	dk[lcp[i]+1]++; // let lcp[i]=k. Here we see a new factor of length k+1, k+2, k+3, ...
+    	dk[i]--; // all suffixes of length <= i (ended by $) create a spurious distinct factor of length i
+    }
 
     for(uint64_t i=1;i<dk.size();++i) dk[i] += dk[i-1];
     
