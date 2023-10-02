@@ -66,7 +66,9 @@ int main(int argc, char* argv[])
 
 	if(N>0) cout << endl;
 
-    cout << "delta = " << delta << endl; 
+	cout << "string length n = " << lcp.size() - 1 << endl;
+    cout << "delta = " << delta << endl;
+    cout << "ratio n/delta = " << double(lcp.size() - 1)/delta << endl; 
     cout << "argmax_k(d_k/k) = " << argmax << endl; 
     cout << "length of longest repeated substring = " << lrs << endl; 
 
