@@ -43,6 +43,7 @@ int main(int argc, char* argv[])
 	double delta_i = 0;
 	double dk_value = 0;
 	uint64_t argmax = 0;
+	uint64_t lrs = 0;
 
 	if(N>0) cout << endl << "k\td_k\td_k/k" << endl;
 
@@ -50,6 +51,9 @@ int main(int argc, char* argv[])
 
     	dk_value = dk_value + dk[i] - 1;
 		delta_i = dk_value/i;
+
+		if(dk_value < lcp.size() - i) 
+			lrs = i; // dk < n - i + 1: there exists repeated string of length i
 
     	if(delta_i>delta){
     		argmax = i;
@@ -64,5 +68,6 @@ int main(int argc, char* argv[])
 
     cout << "delta = " << delta << endl; 
     cout << "argmax_k(d_k/k) = " << argmax << endl; 
+    cout << "length of longest repeated substring = " << lrs << endl; 
 
 }
