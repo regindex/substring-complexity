@@ -15,12 +15,15 @@ using namespace sdsl;
 int main(int argc, char* argv[])
 {
     if (argc < 2 or argc > 3) {
-        cout << "Usage: " << argv[0] << " <file> [N]" << endl;
-        cout << "where <file> contains the input string and N is the number of delta_k values to print (default: 0)" << endl;
+        cout << "Usage: " << argv[0] << " <file> [N] [K]" << endl;
+        cout << "where <file> contains the input string, N is the number of delta_k "
+        	 << "values to print (default: 0), and K is the maximum k-mer length to" 
+        	 << "consider when estimating delta (default: 1000)." << endl;
         return 1;
     }
     string file = argv[1];
     uint64_t N = 0;
+    uint64_t K = 1000;
 
     if(argc==3) N = atoi(argv[2]);
 
@@ -40,6 +43,7 @@ int main(int argc, char* argv[])
     					// note: "spurious" factors of length <=i contining a $ will be removed in the next loop
         
     double delta = 0;
+    double delta_leqK = 0;
 	double delta_i = 0;
 	double dk_value = 0;
 	uint64_t argmax = 0;
@@ -60,6 +64,9 @@ int main(int argc, char* argv[])
 			delta = delta_i;
 		}
 
+    	if(i <= K and delta_i>delta_leqK)
+			delta_leqK = delta_i;
+
 		if(i<=N) cout << i << "\t" << dk_value << "\t" << delta_i << endl;
 
     }
@@ -68,6 +75,7 @@ int main(int argc, char* argv[])
 
 	cout << "string length n = " << lcp.size() - 1 << endl;
     cout << "delta = " << delta << endl;
+    cout << "delta_{<=K} (with K = " << K << ") = " << delta_leqK << endl;
     cout << "ratio n/delta = " << double(lcp.size() - 1)/delta << endl; 
     cout << "argmax_k(d_k/k) = " << argmax << endl; 
     cout << "length of longest repeated substring = " << lrs << endl; 
