@@ -14,7 +14,7 @@ using namespace sdsl;
 
 int main(int argc, char* argv[])
 {
-    if (argc < 2 or argc > 3) {
+    if (argc < 2 or argc > 4) {
         cout << "Usage: " << argv[0] << " <file> [N] [K]" << endl;
         cout << "where <file> contains the input string, N is the number of delta_k "
         	 << "values to print (default: 0), and K is the maximum k-mer length to" 
@@ -25,7 +25,8 @@ int main(int argc, char* argv[])
     uint64_t N = 0;
     uint64_t K = 1000;
 
-    if(argc==3) N = atoi(argv[2]);
+    if(argc>=3) N = atoi(argv[2]);
+    if(argc==4) K = atoi(argv[3]);
 
 	cache_config cc(true); // delete temp files after lcp construction
     lcp_wt<> lcp;
