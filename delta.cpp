@@ -4,7 +4,6 @@
 
 #include <iostream>
 #include <vector>
-
 #include <iostream>
 #include <sdsl/lcp.hpp>
 #include <sdsl/suffix_arrays.hpp>
@@ -14,6 +13,7 @@ using namespace sdsl;
 
 int main(int argc, char* argv[])
 {
+
     if (argc < 2 or argc > 4) {
         cout << "Usage: " << argv[0] << " <file> [N] [K]" << endl;
         cout << "where <file> contains the input string, N is the number of delta_k "

@@ -12,6 +12,7 @@ project (substring-complexity)
 
 include_directories(${PROJECT_SOURCE_DIR})
 include_directories(~/include) #SDSL headers are here
+INCLUDE_DIRECTORIES(include/cpp-HyperLogLog/include include/cpp-HyperLogLog/extlib/igloo include/cpp-HyperLogLog/extlib/igloo-TapTestListener)
 
 LINK_DIRECTORIES(~/lib) #SDSL lib are here
 
@@ -22,6 +23,8 @@ set(CMAKE_CXX_FLAGS_RELEASE "-g -ggdb -Ofast -fstrict-aliasing -DNDEBUG -march=n
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-g -ggdb -Ofast -fstrict-aliasing -march=native")
 
 add_executable(delta delta.cpp)
+add_executable(delta-stream delta-stream.cpp)
 TARGET_LINK_LIBRARIES(delta sdsl)
+TARGET_LINK_LIBRARIES(delta-stream sdsl)
 TARGET_LINK_LIBRARIES(delta divsufsort)
 TARGET_LINK_LIBRARIES(delta divsufsort64)
