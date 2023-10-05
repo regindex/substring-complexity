@@ -13,8 +13,76 @@ using namespace std;
 using namespace sdsl;
 using namespace hll;
 
-//template on the underlying count-distinct sketch
-template<class hll_t = HyperLogLogHIP>
+//template on the type of char
+template<class char_t = char>
+class window_stream{
+
+public:
+
+	struct iterator{
+
+        using iterator_category = std::forward_iterator_tag;
+        using value_type        = char_t;
+        using pointer           = char_t*;
+        using reference         = char_t&;
+
+        // constructor from a position in the stream
+        iterator(window_stream& ws, uint64_t pos) : _ws(ws), _pos(pos) {};
+
+        reference operator*(){ return _ws.at(_pos); };
+        
+        // Prefix increment. Increments the iterator and returns it. 
+        iterator& operator++(){
+        	_pos = (_pos + 1) % _ws._w;
+        	return *this;
+        }
+        
+    private:
+
+        window_stream& _ws;
+        uint64_t _pos;
+    
+    };
+
+	static const uint64_t default_w = 10e6; // 1M characters
+
+	window_stream(uint64_t window_size = default_w) : _w(window_size), _head(0) {
+
+		_window = vector<char_t>(_w,0);
+
+	}
+
+	//shifts window to the right by 1 position and appends a new character at the beginning of stream
+	void push(char_t c){
+		_head = (_head+1)%_w;
+		_window[_head] = c;
+	}
+
+	//get most recent character on the stream. Do not shift window.
+	char& head(){
+
+		return _window[_head];
+			
+	}
+
+	//random access (within the window)
+	char& at(uint64_t i){ return _window[i]; }
+
+	iterator head_iterator(){
+		return {*this,_head};
+	}
+
+private:
+
+	uint64_t _w; //window size
+
+	vector<char_t> _window;
+	uint64_t _head; //most recent stream character
+
+};
+
+//template on the underlying count-distinct sketch and on the char type
+template<class hll_t = HyperLogLogHIP, class char_t = char>
 class sketch{
 
 	/*vector<uint64_t> v {1,2,2,2,3,4,5,5,5,6,6,7,7,7,7,8,9,9,9,10,10};
@@ -31,22 +99,66 @@ public:
 	static constexpr uint8_t default_u = 32; 
 	static constexpr double default_a = 1.001; //logarithm base for the sampling of factor lengths
 	static constexpr uint8_t default_r = 8;
-	static constexpr uint64_t default_e = 100; // the first default_e k-mer lengths are 1..default_e
+	static constexpr uint64_t default_e = 40; // the first default_e k-mer lengths are 1..default_e
+
+	static constexpr uint64_t q = (uint64_t(1)<<61) - 1; // prime for Karp-Rabin fingerprinting (M61)
 
 	sketch(	uint8_t u = default_u, 
 			double a = default_a,
 			uint8_t r = default_r, 
 			uint64_t e = default_e) : _u(u), _a(a), _r(r), _e(e) {
 
-		//total number of HLL sketches: at least default_exact
-		//uint64_t number_hll_sketches = max(_u*_p,uint64_t(default_exact));
+		uint64_t U = uint64_t(1)<<_u;
+		double exp = 1;//exponential
+		uint64_t k = 1;//last sampled length
+		uint64_t sampled_lenghts = _e;//number of sampled kmer lengths
+		
+		while(exp < U){
+			if(uint64_t(exp)>k and uint64_t(exp) > _e){
+				sampled_lenghts++;
+				k = exp;
+			}
+			exp *= a;
+		}
 
-		//hll_sketches = vector<hll_t>(number_hll_sketches,{_r});
+		hll_sketches = vector<hll_t>(sampled_lenghts,{_r});
+		lengths = vector<uint64_t>(sampled_lenghts,0);
+
+		uint64_t i=0;
+		while(i++<_e) lengths[i-1] = i;
+		i--;
+
+		exp = 1;
+		k = _e;
+
+		while(exp < U){
+			if(uint64_t(exp)>k and uint64_t(exp) > _e){
+				lengths[i++]=exp;
+				k = exp;
+			}
+			exp *= a;
+		}
+
+		for(auto x:lengths) cout << x << endl;
 
 	}
 
 	//right-extend text by one character (integer alphabet, we use uint64_t)
-	void extend(uint64_t c){
+	//WARNING: cannot be called on a sketch loaded with load() or after running merge(..).
+	void extend(char_t c){
+
+		if(stream_length==0){ // first stream character
+
+			_fingerprints = {lengths.size(),0};
+			
+			_ws.push(c);
+			_iterators = {lengths.size(),_ws.head_iterator()};
+
+		}else{
+
+
+
+		}
 
 	}
 
@@ -57,7 +169,16 @@ public:
 
 	//get estimate of measure delta
 	double estimate_delta() const {
-		return 0;
+		
+		double delta = 0;
+
+		for(uint64_t i=0;i<lengths.size();++i){
+
+			delta = max(delta,hll_sketches[i].estimate()/lengths[i]);
+
+		}
+
+		return delta;
 	}
 
 	//store sketch to output stream
@@ -85,14 +206,30 @@ public:
 		return _r;
 	}
 
+	//number of sampled factor lengths (for each, we store a HLL sketch)
+	uint64_t get_number_of_samples(){
+		return lengths.size();
+	}
+
 
 private:
+
+	uint64_t z; // random base for Karp-Rabin fingerprinting
+
+	vector<uint64_t> _fingerprints; // Karp-Rabin fingerprints of the windows
+
+	vector<uint64_t> _exponents; // z^
+
+	window_stream<char_t> _ws;
+	vector<typename window_stream<char_t>::iterator> _iterators;
 
 	vector<hll_t> hll_sketches;	// the count-distinct sketches
 	vector<uint64_t> lengths;  // sampled k-mer lengths corresponding to the sketches
 
 	//current stream length (or sum of streams lengths if the sketch is the result of union of streams)
 	uint64_t stream_length = 0; 
+
+	uint64_t max_length = 0; //largest integer such that lengths[max_length] <= stream_length (except with empty sketch) 
 
 	uint8_t _u;  // log2(upper bound to stream length)
 	double _a;   //logarithm base for the sampling of factor lengths
@@ -102,15 +239,18 @@ private:
 };
 
 
+
+
 /*
-	build sketch on the input stream and save it to outfile, if outfile is not empty
+	build sketch on the input stream and save it to outfile, if outfile name is not empty
 */
 void stream_delta(string outfile = {}){
 
-	cout << "file: " << outfile<<endl;
-
 	sketch<> s;
 
+
+	cout << "number of sampled lengths : " << s.get_number_of_samples() << endl;
+	cout << "delta = " << s.estimate_delta() << endl;
 
 }
 
@@ -133,8 +273,11 @@ int main(int argc, char* argv[]){
         		<< "	-m s1 s2, --merge s1 s2" << endl
         		<< "		Merge the sketches contained in files s1 and s2. Outputs delta(s1,s2). The two input sketches must have the same parameters. Can be combined with -o to save the merged sketch." << endl << endl
 
+        		<< "	-c s1 s2, --ncd s1 s2" << endl
+        		<< "		Outputs the normalized compression distance (value in [0,1]) of sketches s1 and s2. The two input sketches must have the same parameters." << endl << endl
+
         		<< "	-u u, --upper-bound u" << endl
-        		<< "		Logarithm in base 2 of the upper bound to the stream length (used with -s). The tool uses working space O(sqrt(2^u) * u). Default: u = " << uint64_t(sketch<>::default_u) << "." << endl << endl
+        		<< "		Logarithm in base 2 of the upper bound to the stream length (used with -s). The tool uses working space O(2^(u/2) * u) to build the sketch of the stream. Default: u = " << uint64_t(sketch<>::default_u) << "." << endl << endl
 
         		<< "	-a a, --sample-rate a" << endl
         		<< "		Sample rate. Samples log_a(stream length) factor lengths. Must be a double a>1. Default: a = " << sketch<>::default_a << "." << endl << endl
@@ -153,7 +296,7 @@ int main(int argc, char* argv[]){
 
     if(strcmp(argv[1], "-s") == 0 or strcmp(argv[1], "--stream")){
 
-    	if(argc > 2) stream_delta(argv[2]);
+    	stream_delta();
 
     }
 
