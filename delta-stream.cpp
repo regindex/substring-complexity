@@ -13,6 +13,24 @@ using namespace std;
 using namespace sdsl;
 using namespace hll;
 
+
+//computes z^e mod q using fast exponentiation
+uint64_t fexp(uint64_t z, uint64_t e, uint64_t q){
+
+	__uint128_t z_2_i = z % q; // z^(2^i) mod q (initially, i=0)
+	__uint128_t res = 1;
+
+	while(e>0){
+
+		res = (res * (e&1 ? z_2_i : 1)) % q;
+		e = e>>1;
+		z_2_i = (z_2_i * z_2_i) % q; 
+	}
+
+	return res;
+
+}
+
 //template on the type of char
 template<class char_t = char>
 class window_stream{
@@ -68,6 +86,8 @@ public:
 	//random access (within the window)
 	char& at(uint64_t i){ return _window[i]; }
 
+	uint64_t window_size(){return _w;}
+
 	iterator head_iterator(){
 		return {*this,_head};
 	}
@@ -85,12 +105,6 @@ private:
 template<class hll_t = HyperLogLogHIP, class char_t = char>
 class sketch{
 
-	/*vector<uint64_t> v {1,2,2,2,3,4,5,5,5,6,6,7,7,7,7,8,9,9,9,10,10};
-	//HyperLogLog hll(10);
-	HyperLogLogHIP hll(10);
-	for(auto x:v) hll.add(reinterpret_cast<char*>(&x),sizeof(x));
-	cout << "cardinality = " << hll.estimate() << endl;*/
-
 public:
 
 	//total sketch size is <= (_e + (_u/log2(a))) * 2^_r HLL registers 
@@ -103,10 +117,11 @@ public:
 
 	static constexpr uint64_t q = (uint64_t(1)<<61) - 1; // prime for Karp-Rabin fingerprinting (M61)
 
-	sketch(	uint8_t u = default_u, 
+	sketch(	uint64_t z, //random base for KR hashing
+			uint8_t u = default_u, 
 			double a = default_a,
 			uint8_t r = default_r, 
-			uint64_t e = default_e) : _u(u), _a(a), _r(r), _e(e) {
+			uint64_t e = default_e) : _z(z), _u(u), _a(a), _r(r), _e(e) {
 
 		uint64_t U = uint64_t(1)<<_u;
 		double exp = 1;//exponential
@@ -139,26 +154,56 @@ public:
 			exp *= a;
 		}
 
-		for(auto x:lengths) cout << x << endl;
-
 	}
 
-	//right-extend text by one character (integer alphabet, we use uint64_t)
+	//right-extend text by one character
 	//WARNING: cannot be called on a sketch loaded with load() or after running merge(..).
 	void extend(char_t c){
 
-		if(stream_length==0){ // first stream character
+		if(stream_length==0){ // first stream character: initialize arrays
 
-			_fingerprints = {lengths.size(),0};
-			
-			_ws.push(c);
+			_fingerprints =	{lengths.size(),0};
 			_iterators = {lengths.size(),_ws.head_iterator()};
+			_exponents = {lengths.size(),0};
 
-		}else{
-
-
+			for(uint64_t i=0;i<lengths.size();++i)
+				_exponents[i] = fexp(z,lengths[i]-1,q); //fast exponentiation: z^(lengths[i]-1) mod q
 
 		}
+
+		for(uint64_t i=0;i<lengths.size();++i){
+
+			if(lengths[i] <= _ws.window_size()){ //ignore k-mers that do not fit in window
+
+				// remove from the active fingerprints the oldest character
+				// and move forward their iterators
+				if(stream_length >= lengths[i]){
+
+					char_t b = *_iterators[i]; //get oldest character
+					__uint128_t remove = (__uint128_t(b)*__uint128_t(_exponents[i])) % q;
+					_fingerprints[i] = ((__uint128_t(_fingerprints[i]) + q) - remove) % q;
+					++_iterators[i];
+
+				}
+
+				//append new character to all fingerprints
+				_fingerprints[i] = (__uint128_t(_fingerprints[i])*__uint128_t(z) + c) % q;
+
+				if(stream_length >= lengths[i]){
+
+					//if updated fingerprint is active, insert it in the HLL sketch
+					hll_sketches[i].add(reinterpret_cast<char*>(&_fingerprints[i]),sizeof(_fingerprints[i]));
+
+				}
+
+			}
+
+		}
+
+		// append the new character to the internal window-stream
+
+		_ws.push(c);
+		stream_length++;
 
 	}
 
@@ -218,7 +263,7 @@ private:
 
 	vector<uint64_t> _fingerprints; // Karp-Rabin fingerprints of the windows
 
-	vector<uint64_t> _exponents; // z^
+	vector<uint64_t> _exponents; // z^lengths[0], z^lengths[1], z^lengths[2], ...
 
 	window_stream<char_t> _ws;
 	vector<typename window_stream<char_t>::iterator> _iterators;
@@ -231,6 +276,7 @@ private:
 
 	uint64_t max_length = 0; //largest integer such that lengths[max_length] <= stream_length (except with empty sketch) 
 
+	uint64_t _z; // base of Karp-Rabin hashing (should be a random number in (0,q))
 	uint8_t _u;  // log2(upper bound to stream length)
 	double _a;   //logarithm base for the sampling of factor lengths
 	uint8_t _r;  // log2(number of registers used by each HLL sketch)
@@ -246,8 +292,18 @@ private:
 */
 void stream_delta(string outfile = {}){
 
-	sketch<> s;
+	//TODO replace with random integer
+	
+	sketch<> s(324231);
 
+	s.extend('a');
+	s.extend('b');
+	s.extend('c');
+	s.extend('a');
+	s.extend('b');
+	s.extend('c');
+	s.extend('a');
+	s.extend('b');
 
 	cout << "number of sampled lengths : " << s.get_number_of_samples() << endl;
 	cout << "delta = " << s.estimate_delta() << endl;
@@ -255,6 +311,8 @@ void stream_delta(string outfile = {}){
 }
 
 int main(int argc, char* argv[]){
+
+	exit(0);
 
     if (argc < 2) {
         cout	<< "Usage: " << argv[0] << " [options] [< input stream]" << endl << endl
