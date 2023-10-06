@@ -1,0 +1,3 @@
+[submodule "include/cpp-HyperLogLog"]
+	path = include/cpp-HyperLogLog
+	url = https://github.com/hideo55/cpp-HyperLogLog
