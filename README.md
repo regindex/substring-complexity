@@ -6,9 +6,9 @@ Author: Nicola Prezza (nicola.prezza@gmail.com)
 
 This software computes the measure $\delta = max_k (d_k/k)$, where $d_k$ is the number of distinct factors of length $k$ of the input string. 
 
-The tool `delta` computes the exact measure and outputs also related statistics, such as $argmax_k (d_k/k)$, $d_k/k$, and $d_k$ for small values of $k$. Based on the algorithm described in 
+The tool `delta` computes the exact measure and outputs also related statistics, such as $argmax_k (d_k/k)$, $d_k/k$, and $d_k$ for small values of $k$. Based on the algorithm described in:
 
-Tomasz Kociumaka, Gonzalo Navarro, Nicola Prezza, Toward a Definitive Compressibility Measure for Repetitive Sequences. IEEE Trans. Inf. Theory 69(4): 2074-2092 (2023)
+*Tomasz Kociumaka, Gonzalo Navarro, Nicola Prezza, Toward a Definitive Compressibility Measure for Repetitive Sequences. IEEE Trans. Inf. Theory 69(4): 2074-2092 (2023)*
 
 The tool `delta-stream` computes an approximation of $\delta$ using sublinear working space.
  
@@ -16,7 +16,7 @@ The tool `delta-stream` computes an approximation of $\delta$ using sublinear wo
 
 To clone the repository, run:
 
-> git clone --recursive https://github.com/nicolaprezza/substring-complexity
+> git clone --recursive https://github.com/regindex/substring-complexity
 
 ### Compile
 
