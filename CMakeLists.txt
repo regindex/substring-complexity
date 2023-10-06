@@ -18,9 +18,9 @@ LINK_DIRECTORIES(~/lib) #SDSL lib are here
 
 message("Building in ${CMAKE_BUILD_TYPE} mode")
 
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -ggdb -g")
-set(CMAKE_CXX_FLAGS_RELEASE "-g -ggdb -Ofast -fstrict-aliasing -DNDEBUG -march=native")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-g -ggdb -Ofast -fstrict-aliasing -march=native")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -ggdb -g -Wno-deprecated")
+set(CMAKE_CXX_FLAGS_RELEASE "-g -ggdb -Ofast -fstrict-aliasing -DNDEBUG -march=native -Wno-deprecated")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-g -ggdb -Ofast -fstrict-aliasing -march=native -Wno-deprecated")
 
 add_executable(delta delta.cpp)
 add_executable(delta-stream delta-stream.cpp)

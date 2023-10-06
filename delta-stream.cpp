@@ -310,8 +310,6 @@ void stream_delta(string outfile = {}){
 
 int main(int argc, char* argv[]){
 
-	exit(0);
-
     if (argc < 2) {
         cout	<< "Usage: " << argv[0] << " [options] [< input stream]" << endl << endl
 
