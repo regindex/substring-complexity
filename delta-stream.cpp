@@ -5,6 +5,7 @@
 #include <iostream>
 #include <vector>
 #include <iostream>
+#include <set>
 #include <sdsl/lcp.hpp>
 #include <sdsl/suffix_arrays.hpp>
 #include "hyperloglog.hpp"
@@ -31,76 +32,6 @@ uint64_t fexp(uint64_t z, uint64_t e, uint64_t q){
 
 }
 
-//template on the type of char
-template<class char_t = char>
-class window_stream{
-
-public:
-
-	struct iterator{
-
-        using iterator_category = std::forward_iterator_tag;
-        using value_type        = char_t;
-        using pointer           = char_t*;
-        using reference         = char_t&;
-
-        // constructor from a position in the stream
-        iterator(window_stream& ws, uint64_t pos) : _ws(ws), _pos(pos) {};
-
-        reference operator*(){ return _ws.at(_pos); };
-        
-        // Prefix increment. Increments the iterator and returns it. 
-        iterator& operator++(){
-        	_pos = (_pos + 1) % _ws._w;
-        	return *this;
-        }
-        
-    private:
-
-        window_stream& _ws;
-        uint64_t _pos;
-    
-    };
-
-	static const uint64_t default_w = 10e6; // 1M characters
-
-	window_stream(uint64_t window_size = default_w) : _w(window_size), _head(0) {
-
-		_window = vector<char_t>(_w,0);
-
-	}
-
-	//shifts window to the right by 1 position and appends a new character at the beginning of stream
-	void push(char_t c){
-		_head = (_head+1)%_w;
-		_window[_head] = c;
-	}
-
-	//get most recent character on the stream. Do not shift window.
-	char& head(){
-
-		return _window[_head];
-			
-	}
-
-	//random access (within the window)
-	char& at(uint64_t i){ return _window[i]; }
-
-	uint64_t window_size(){return _w;}
-
-	iterator head_iterator(){
-		return {*this,_head};
-	}
-
-private:
-
-	uint64_t _w; //window size
-
-	vector<char_t> _window;
-	uint64_t _head; //most recent stream character
-
-};
-
 //template on the underlying count-distinct sketch and on the char type
 template<class hll_t = HyperLogLogHIP, class char_t = char>
 class sketch{
@@ -111,9 +42,9 @@ public:
 	//(_u/log2(a) = log_a(U), where U=2^_u is the upper bound to the stream's length)
 
 	static constexpr uint8_t default_u = 32; 
-	static constexpr double default_a = 1.001; //logarithm base for the sampling of factor lengths
-	static constexpr uint8_t default_r = 8;
-	static constexpr uint64_t default_e = 40; // the first default_e k-mer lengths are 1..default_e
+	static constexpr double default_a = 1.5; //logarithm base for the sampling of factor _lengths
+	static constexpr uint8_t default_r = 10;
+	static constexpr uint64_t default_e = 20; // the first default_e k-mer _lengths are 1..default_e
 
 	static constexpr uint64_t q = (uint64_t(1)<<61) - 1; // prime for Karp-Rabin fingerprinting (M61)
 
@@ -126,8 +57,12 @@ public:
 		uint64_t U = uint64_t(1)<<_u;
 		double exp = 1;//exponential
 		uint64_t k = 1;//last sampled length
-		uint64_t sampled_lenghts = _e;//number of sampled kmer lengths
+		uint64_t sampled_lenghts = _e;//number of sampled kmer _lengths
 		
+		//TO DO adjust the window size once theory is ready!!
+		//for now, sqrt(max stream length)*log(max stream length)
+		_window_size = (uint64_t(1)<<(_u/2))*_u;
+
 		while(exp < U){
 			if(uint64_t(exp)>k and uint64_t(exp) > _e){
 				sampled_lenghts++;
@@ -136,11 +71,11 @@ public:
 			exp *= a;
 		}
 
-		hll_sketches = vector<hll_t>(sampled_lenghts,{_r});
-		lengths = vector<uint64_t>(sampled_lenghts,0);
+		_hll_sketches = vector<hll_t>(sampled_lenghts,{_r});
+		_lengths = vector<uint64_t>(sampled_lenghts,0);
 
 		uint64_t i=0;
-		while(i++<_e) lengths[i-1] = i;
+		while(i++<_e) _lengths[i-1] = i;
 		i--;
 
 		exp = 1;
@@ -148,7 +83,7 @@ public:
 
 		while(exp < U){
 			if(uint64_t(exp)>k and uint64_t(exp) > _e){
-				lengths[i++]=exp;
+				_lengths[i++]=exp;
 				k = exp;
 			}
 			exp *= a;
@@ -160,39 +95,63 @@ public:
 	//WARNING: cannot be called on a sketch loaded with load() or after running merge(..).
 	void extend(char_t c){
 
-		if(stream_length==0){ // first stream character: initialize arrays
+		if(_stream_length==0){ // first stream character: initialize arrays
 
-			_fingerprints =	{lengths.size(),0};
-			_iterators = {lengths.size(),_ws.head_iterator()};
-			_exponents = {lengths.size(),0};
+			_window = vector<char_t>(_window_size,0);
+			_window_bookmarks = vector<uint64_t>(_lengths.size(),0);
+			_fingerprints =	vector<uint64_t>(_lengths.size(),0);
+			_exponents = vector<uint64_t>(_lengths.size(),0);
 
-			for(uint64_t i=0;i<lengths.size();++i)
-				_exponents[i] = fexp(_z,lengths[i]-1,q); //fast exponentiation: z^(lengths[i]-1) mod q
+			for(uint64_t i=0;i<_lengths.size();++i){
+				assert(i<_exponents.size());
+				_exponents[i] = fexp(_z,_lengths[i]-1,q); //fast exponentiation: z^(_lengths[i]-1) mod q
+			}
 
 		}
 
-		for(uint64_t i=0;i<lengths.size();++i){
+		/*DEBUG*/ //cout << "new char: " << c << endl;
 
-			if(lengths[i] <= _ws.window_size()){ //ignore k-mers that do not fit in window
+		for(uint64_t i=0;i<_lengths.size();++i){
+
+			/*DEBUG*/ //cout << "checking length " << _lengths[i] << " (window size = " << _window_size << ")" << endl;
+
+			assert(i<_lengths.size());
+			if(_lengths[i] <= _window_size){ //ignore k-mers that do not fit in window
 
 				// remove from the active fingerprints the oldest character
 				// and move forward their iterators
-				if(stream_length >= lengths[i]){
+				
+				/*DEBUG*/ //cout << "  stream len = " << _stream_length << ", lengths[i] = " << _lengths[i] << endl;
 
-					char_t b = *_iterators[i]; //get oldest character
+				if(_stream_length >= _lengths[i]){
+					
+					/*DEBUG*/ //cout << "  enter IF (remove oldest char)" << endl;
+
+					char_t b = _window[_window_bookmarks[i]]; //get oldest character
+
 					__uint128_t remove = (__uint128_t(b)*__uint128_t(_exponents[i])) % q;
 					_fingerprints[i] = ((__uint128_t(_fingerprints[i]) + q) - remove) % q;
-					++_iterators[i];
+
+					// shift forward the bookmark
+					_window_bookmarks[i] = (_window_bookmarks[i]+1) % _window_size;
 
 				}
 
-				//append new character to all fingerprints
+				//append new character to all fingerprints:
+				//since we have already removed the oldest character (done in previous if),
+				//we only need to left-shift fingerprint (multiply by _z) and add c
 				_fingerprints[i] = (__uint128_t(_fingerprints[i])*__uint128_t(_z) + c) % q;
 
-				if(stream_length >= lengths[i]){
+				//_stream_length increased by 1 in the fingerprints: if the updated stream length
+				// is >= the current k-mer length, insert the k-mer fingerprint in the HLL sketch
+				if(_stream_length+1 >= _lengths[i]){
 
-					//if updated fingerprint is active, insert it in the HLL sketch
-					hll_sketches[i].add(reinterpret_cast<char*>(&_fingerprints[i]),sizeof(_fingerprints[i]));
+					/*DEBUG*/ //cout << "  inserting fingerprint " << _fingerprints[i] << " in sketch for length " << _lengths[i] << endl;
+
+					assert(i<_hll_sketches.size());
+					_hll_sketches[i].add(reinterpret_cast<char*>(&_fingerprints[i]),sizeof(_fingerprints[i]));
+
+					/*DEBUG*/ if(_lengths[i]==2) fp.insert(_fingerprints[i]);
 
 				}
 
@@ -200,10 +159,15 @@ public:
 
 		}
 
-		// append the new character to the internal window-stream
+		//if empty stream, leave _window_head to 0 (_window_head always points to
+		//most recent stream character). Otherwise, increment it.
+		_window_head = (_window_head + (_stream_length>0))%_window_size;
 
-		_ws.push(c);
-		stream_length++;
+		//store new character in updated _window_head
+		_window[_window_head] = c;
+
+		//update stream length
+		_stream_length++;
 
 	}
 
@@ -217,9 +181,12 @@ public:
 		
 		double delta = 0;
 
-		for(uint64_t i=0;i<lengths.size();++i){
+		/*DEBUG*/ cout << endl << "D2 (set) = " << fp.size() << endl; 
 
-			delta = max(delta,hll_sketches[i].estimate()/lengths[i]);
+		for(uint64_t i=0;i<_lengths.size();++i){
+
+			/*DEBUG*/ cout << "d_" << _lengths[i] << " = " << _hll_sketches[i].estimate() << endl;
+			delta = max(delta,_hll_sketches[i].estimate()/_lengths[i]);
 
 		}
 
@@ -237,8 +204,8 @@ public:
 	}
 
 	//return current stream length
-	uint64_t get_stream_length() const {
-		return stream_length;
+	uint64_t stream_length() const {
+		return _stream_length;
 	}
 
 	//return log2(upper bound to stream length)
@@ -251,34 +218,38 @@ public:
 		return _r;
 	}
 
-	//number of sampled factor lengths (for each, we store a HLL sketch)
+	//number of sampled factor _lengths (for each, we store a HLL sketch)
 	uint64_t get_number_of_samples(){
-		return lengths.size();
+		return _lengths.size();
 	}
 
 
 private:
 
+	/*DEBUG*/ set<__uint128_t> fp;
+
 	vector<uint64_t> _fingerprints; // Karp-Rabin fingerprints of the windows
 
-	vector<uint64_t> _exponents; // z^lengths[0], z^lengths[1], z^lengths[2], ...
+	vector<uint64_t> _exponents; // z^_lengths[0], z^_lengths[1], z^_lengths[2], ...
 
-	window_stream<char_t> _ws;
-	vector<typename window_stream<char_t>::iterator> _iterators;
+	//store a window of the last 
+	vector<char_t> _window;
+	uint64_t _window_head = 0;
+	vector<uint64_t> _window_bookmarks;
 
-	vector<hll_t> hll_sketches;	// the count-distinct sketches
-	vector<uint64_t> lengths;  // sampled k-mer lengths corresponding to the sketches
+	vector<hll_t> _hll_sketches;	// the count-distinct sketches
+	vector<uint64_t> _lengths;  // sampled k-mer _lengths corresponding to the sketches
 
-	//current stream length (or sum of streams lengths if the sketch is the result of union of streams)
-	uint64_t stream_length = 0; 
+	//current stream length (or sum of streams _lengths if the sketch is the result of union of streams)
+	uint64_t _stream_length = 0; 
 
-	uint64_t max_length = 0; //largest integer such that lengths[max_length] <= stream_length (except with empty sketch) 
+	uint64_t _window_size;
 
 	uint64_t _z; // base of Karp-Rabin hashing (should be a random number in (0,q))
 	uint8_t _u;  // log2(upper bound to stream length)
-	double _a;   //logarithm base for the sampling of factor lengths
+	double _a;   //logarithm base for the sampling of factor _lengths
 	uint8_t _r;  // log2(number of registers used by each HLL sketch)
-	uint64_t _e; // the first default_e k-mer lengths are 1..default_e
+	uint64_t _e; // the first default_e k-mer _lengths are 1..default_e
 
 };
 
@@ -291,19 +262,23 @@ private:
 void stream_delta(string outfile = {}){
 
 	//TODO replace with random integer
-	
-	sketch<> s(324231);
 
-	s.extend('a');
-	s.extend('b');
-	s.extend('c');
-	s.extend('a');
-	s.extend('b');
-	s.extend('c');
-	s.extend('a');
-	s.extend('b');
+	//sketch<HyperLogLog> s(324289893284831);	
+	sketch<> s(324289893284831);
+
+	uint64_t i = 0;
+
+	while(cin){
+		char c = cin.get();
+		if(cin){
+			s.extend(c);
+			i++;
+			if(i%100000==0) cout << "Processed " << i << " characters." << endl;
+		}
+	}
 
 	cout << "number of sampled lengths : " << s.get_number_of_samples() << endl;
+	cout << "stream length = " << s.stream_length() << endl;
 	cout << "delta = " << s.estimate_delta() << endl;
 
 }
@@ -334,10 +309,10 @@ int main(int argc, char* argv[]){
         		<< "		Logarithm in base 2 of the upper bound to the stream length (used with -s). The tool uses working space O(2^(u/2) * u) to build the sketch of the stream. Default: u = " << uint64_t(sketch<>::default_u) << "." << endl << endl
 
         		<< "	-a a, --sample-rate a" << endl
-        		<< "		Sample rate. Samples log_a(stream length) factor lengths. Must be a double a>1. Default: a = " << sketch<>::default_a << "." << endl << endl
+        		<< "		Sample rate. Samples log_a(stream length) factor _lengths. Must be a double a>1. Default: a = " << sketch<>::default_a << "." << endl << endl
 
         		<< "	-e E, --exact E" << endl
-        		<< "		Factor lengths {1,2,...,E} are always sampled. Default: E = " << sketch<>::default_e << endl << endl
+        		<< "		Factor _lengths {1,2,...,E} are always sampled. Default: E = " << sketch<>::default_e << endl << endl
 
 
         		<< "	-r R, --registers R" << endl
