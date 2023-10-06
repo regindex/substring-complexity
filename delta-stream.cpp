@@ -167,7 +167,7 @@ public:
 			_exponents = {lengths.size(),0};
 
 			for(uint64_t i=0;i<lengths.size();++i)
-				_exponents[i] = fexp(z,lengths[i]-1,q); //fast exponentiation: z^(lengths[i]-1) mod q
+				_exponents[i] = fexp(_z,lengths[i]-1,q); //fast exponentiation: z^(lengths[i]-1) mod q
 
 		}
 
@@ -187,7 +187,7 @@ public:
 				}
 
 				//append new character to all fingerprints
-				_fingerprints[i] = (__uint128_t(_fingerprints[i])*__uint128_t(z) + c) % q;
+				_fingerprints[i] = (__uint128_t(_fingerprints[i])*__uint128_t(_z) + c) % q;
 
 				if(stream_length >= lengths[i]){
 
@@ -258,8 +258,6 @@ public:
 
 
 private:
-
-	uint64_t z; // random base for Karp-Rabin fingerprinting
 
 	vector<uint64_t> _fingerprints; // Karp-Rabin fingerprints of the windows
 
