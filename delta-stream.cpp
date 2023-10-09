@@ -22,7 +22,6 @@ uint64_t fexp(uint64_t z, uint64_t e, uint64_t q){
 	__uint128_t res = 1;
 
 	while(e>0){
-
 		res = (res * (e&1 ? z_2_i : 1)) % q;
 		e = e>>1;
 		z_2_i = (z_2_i * z_2_i) % q; 
@@ -33,7 +32,7 @@ uint64_t fexp(uint64_t z, uint64_t e, uint64_t q){
 }
 
 //template on the underlying count-distinct sketch and on the char type
-template<class hll_t = HyperLogLogHIP, class char_t = char>
+template<class hll_t = HyperLogLogHIP, class char_t = uint8_t>
 class sketch{
 
 public:
@@ -42,7 +41,7 @@ public:
 	//(_u/log2(a) = log_a(U), where U=2^_u is the upper bound to the stream's length)
 
 	static constexpr uint8_t default_u = 32; 
-	static constexpr double default_a = 1.5; //logarithm base for the sampling of factor _lengths
+	static constexpr double default_a = 1.2; //logarithm base for the sampling of factor _lengths
 	static constexpr uint8_t default_r = 10;
 	static constexpr uint64_t default_e = 20; // the first default_e k-mer _lengths are 1..default_e
 
@@ -109,8 +108,6 @@ public:
 
 		}
 
-		/*DEBUG*/ //cout << "new char: " << c << endl;
-
 		for(uint64_t i=0;i<_lengths.size();++i){
 
 			/*DEBUG*/ //cout << "checking length " << _lengths[i] << " (window size = " << _window_size << ")" << endl;
@@ -132,6 +129,17 @@ public:
 					__uint128_t remove = (__uint128_t(b)*__uint128_t(_exponents[i])) % q;
 					_fingerprints[i] = ((__uint128_t(_fingerprints[i]) + q) - remove) % q;
 
+					/*DEBUG if(_lengths[i]==2){
+
+
+						fp_alt.insert(hash_debug);
+
+						cout << "exponent = " << _exponents[i] << endl;
+						cout << "stream len = " << _stream_length << endl;
+ 						cout << "fingerprints: " << _fingerprints[i] << " / " << hash_debug << endl;
+
+					}*/
+
 					// shift forward the bookmark
 					_window_bookmarks[i] = (_window_bookmarks[i]+1) % _window_size;
 
@@ -150,8 +158,6 @@ public:
 
 					assert(i<_hll_sketches.size());
 					_hll_sketches[i].add(reinterpret_cast<char*>(&_fingerprints[i]),sizeof(_fingerprints[i]));
-
-					/*DEBUG*/ if(_lengths[i]==2) fp.insert(_fingerprints[i]);
 
 				}
 
@@ -181,11 +187,9 @@ public:
 		
 		double delta = 0;
 
-		/*DEBUG*/ cout << endl << "D2 (set) = " << fp.size() << endl; 
-
 		for(uint64_t i=0;i<_lengths.size();++i){
 
-			/*DEBUG*/ cout << "d_" << _lengths[i] << " = " << _hll_sketches[i].estimate() << endl;
+			/*DEBUG*/ //cout << "d_" << _lengths[i] << " = " << _hll_sketches[i].estimate() << endl;
 			delta = max(delta,_hll_sketches[i].estimate()/_lengths[i]);
 
 		}
@@ -225,8 +229,6 @@ public:
 
 
 private:
-
-	/*DEBUG*/ set<__uint128_t> fp;
 
 	vector<uint64_t> _fingerprints; // Karp-Rabin fingerprints of the windows
 
@@ -269,7 +271,7 @@ void stream_delta(string outfile = {}){
 	uint64_t i = 0;
 
 	while(cin){
-		char c = cin.get();
+		uint8_t c = cin.get();
 		if(cin){
 			s.extend(c);
 			i++;
