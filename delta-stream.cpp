@@ -110,35 +110,18 @@ public:
 
 		for(uint64_t i=0;i<_lengths.size();++i){
 
-			/*DEBUG*/ //cout << "checking length " << _lengths[i] << " (window size = " << _window_size << ")" << endl;
-
 			assert(i<_lengths.size());
 			if(_lengths[i] <= _window_size){ //ignore k-mers that do not fit in window
 
 				// remove from the active fingerprints the oldest character
 				// and move forward their iterators
 				
-				/*DEBUG*/ //cout << "  stream len = " << _stream_length << ", lengths[i] = " << _lengths[i] << endl;
-
 				if(_stream_length >= _lengths[i]){
-					
-					/*DEBUG*/ //cout << "  enter IF (remove oldest char)" << endl;
-
+				
 					char_t b = _window[_window_bookmarks[i]]; //get oldest character
 
 					__uint128_t remove = (__uint128_t(b)*__uint128_t(_exponents[i])) % q;
 					_fingerprints[i] = ((__uint128_t(_fingerprints[i]) + q) - remove) % q;
-
-					/*DEBUG if(_lengths[i]==2){
-
-
-						fp_alt.insert(hash_debug);
-
-						cout << "exponent = " << _exponents[i] << endl;
-						cout << "stream len = " << _stream_length << endl;
- 						cout << "fingerprints: " << _fingerprints[i] << " / " << hash_debug << endl;
-
-					}*/
 
 					// shift forward the bookmark
 					_window_bookmarks[i] = (_window_bookmarks[i]+1) % _window_size;
@@ -153,8 +136,6 @@ public:
 				//_stream_length increased by 1 in the fingerprints: if the updated stream length
 				// is >= the current k-mer length, insert the k-mer fingerprint in the HLL sketch
 				if(_stream_length+1 >= _lengths[i]){
-
-					/*DEBUG*/ //cout << "  inserting fingerprint " << _fingerprints[i] << " in sketch for length " << _lengths[i] << endl;
 
 					assert(i<_hll_sketches.size());
 					_hll_sketches[i].add(reinterpret_cast<char*>(&_fingerprints[i]),sizeof(_fingerprints[i]));
@@ -187,12 +168,8 @@ public:
 		
 		double delta = 0;
 
-		for(uint64_t i=0;i<_lengths.size();++i){
-
-			/*DEBUG*/ //cout << "d_" << _lengths[i] << " = " << _hll_sketches[i].estimate() << endl;
+		for(uint64_t i=0;i<_lengths.size();++i)
 			delta = max(delta,_hll_sketches[i].estimate()/_lengths[i]);
-
-		}
 
 		return delta;
 	}
