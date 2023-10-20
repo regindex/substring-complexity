@@ -2,310 +2,380 @@
 // Use of this source code is governed
 // by a MIT license that can be found in the LICENSE file.
 
-#include <iostream>
-#include <vector>
-#include <iostream>
-#include <set>
-#include <sdsl/lcp.hpp>
-#include <sdsl/suffix_arrays.hpp>
-#include "hyperloglog.hpp"
-
-using namespace std;
-using namespace sdsl;
-using namespace hll;
-
-
-//computes z^e mod q using fast exponentiation
-uint64_t fexp(uint64_t z, uint64_t e, uint64_t q){
-
-	__uint128_t z_2_i = z % q; // z^(2^i) mod q (initially, i=0)
-	__uint128_t res = 1;
-
-	while(e>0){
-		res = (res * (e&1 ? z_2_i : 1)) % q;
-		e = e>>1;
-		z_2_i = (z_2_i * z_2_i) % q; 
-	}
-
-	return res;
-
-}
-
-//template on the underlying count-distinct sketch and on the char type
-template<class hll_t = HyperLogLogHIP, class char_t = uint8_t>
-class sketch{
-
-public:
-
-	//total sketch size is <= (_e + (_u/log2(a))) * 2^_r HLL registers 
-	//(_u/log2(a) = log_a(U), where U=2^_u is the upper bound to the stream's length)
-
-	static constexpr uint8_t default_u = 32; 
-	static constexpr double default_a = 1.2; //logarithm base for the sampling of factor _lengths
-	static constexpr uint8_t default_r = 10;
-	static constexpr uint64_t default_e = 20; // the first default_e k-mer _lengths are 1..default_e
-
-	static constexpr uint64_t q = (uint64_t(1)<<61) - 1; // prime for Karp-Rabin fingerprinting (M61)
-
-	sketch(	uint64_t z, //random base for KR hashing
-			uint8_t u = default_u, 
-			double a = default_a,
-			uint8_t r = default_r, 
-			uint64_t e = default_e) : _z(z), _u(u), _a(a), _r(r), _e(e) {
-
-		uint64_t U = uint64_t(1)<<_u;
-		double exp = 1;//exponential
-		uint64_t k = 1;//last sampled length
-		uint64_t sampled_lenghts = _e;//number of sampled kmer _lengths
-		
-		//TO DO adjust the window size once theory is ready!!
-		//for now, sqrt(max stream length)*log(max stream length)
-		_window_size = (uint64_t(1)<<(_u/2))*_u;
-
-		while(exp < U){
-			if(uint64_t(exp)>k and uint64_t(exp) > _e){
-				sampled_lenghts++;
-				k = exp;
-			}
-			exp *= a;
-		}
-
-		_hll_sketches = vector<hll_t>(sampled_lenghts,{_r});
-		_lengths = vector<uint64_t>(sampled_lenghts,0);
-
-		uint64_t i=0;
-		while(i++<_e) _lengths[i-1] = i;
-		i--;
-
-		exp = 1;
-		k = _e;
-
-		while(exp < U){
-			if(uint64_t(exp)>k and uint64_t(exp) > _e){
-				_lengths[i++]=exp;
-				k = exp;
-			}
-			exp *= a;
-		}
-
-	}
-
-	//right-extend text by one character
-	//WARNING: cannot be called on a sketch loaded with load() or after running merge(..).
-	void extend(char_t c){
-
-		if(_stream_length==0){ // first stream character: initialize arrays
-
-			_window = vector<char_t>(_window_size,0);
-			_window_bookmarks = vector<uint64_t>(_lengths.size(),0);
-			_fingerprints =	vector<uint64_t>(_lengths.size(),0);
-			_exponents = vector<uint64_t>(_lengths.size(),0);
-
-			for(uint64_t i=0;i<_lengths.size();++i){
-				assert(i<_exponents.size());
-				_exponents[i] = fexp(_z,_lengths[i]-1,q); //fast exponentiation: z^(_lengths[i]-1) mod q
-			}
-
-		}
-
-		for(uint64_t i=0;i<_lengths.size();++i){
-
-			assert(i<_lengths.size());
-			if(_lengths[i] <= _window_size){ //ignore k-mers that do not fit in window
-
-				// remove from the active fingerprints the oldest character
-				// and move forward their iterators
-				
-				if(_stream_length >= _lengths[i]){
-				
-					char_t b = _window[_window_bookmarks[i]]; //get oldest character
-
-					__uint128_t remove = (__uint128_t(b)*__uint128_t(_exponents[i])) % q;
-					_fingerprints[i] = ((__uint128_t(_fingerprints[i]) + q) - remove) % q;
-
-					// shift forward the bookmark
-					_window_bookmarks[i] = (_window_bookmarks[i]+1) % _window_size;
-
-				}
-
-				//append new character to all fingerprints:
-				//since we have already removed the oldest character (done in previous if),
-				//we only need to left-shift fingerprint (multiply by _z) and add c
-				_fingerprints[i] = (__uint128_t(_fingerprints[i])*__uint128_t(_z) + c) % q;
-
-				//_stream_length increased by 1 in the fingerprints: if the updated stream length
-				// is >= the current k-mer length, insert the k-mer fingerprint in the HLL sketch
-				if(_stream_length+1 >= _lengths[i]){
-
-					assert(i<_hll_sketches.size());
-					_hll_sketches[i].add(reinterpret_cast<char*>(&_fingerprints[i]),sizeof(_fingerprints[i]));
-
-				}
-
-			}
-
-		}
-
-		//if empty stream, leave _window_head to 0 (_window_head always points to
-		//most recent stream character). Otherwise, increment it.
-		_window_head = (_window_head + (_stream_length>0))%_window_size;
-
-		//store new character in updated _window_head
-		_window[_window_head] = c;
-
-		//update stream length
-		_stream_length++;
-
-	}
-
-	//merge this sketch with s
-	void merge(const sketch& s){
-
-	}
-
-	//get estimate of measure delta
-	double estimate_delta() const {
-		
-		double delta = 0;
-
-		for(uint64_t i=0;i<_lengths.size();++i)
-			delta = max(delta,_hll_sketches[i].estimate()/_lengths[i]);
-
-		return delta;
-	}
-
-	//store sketch to output stream
-	void store(ostream& os) const {
-
-	}
-
-	//load sketch from input stream
-	void load(const istream& is){
-
-	}
-
-	//return current stream length
-	uint64_t stream_length() const {
-		return _stream_length;
-	}
-
-	//return log2(upper bound to stream length)
-	uint8_t get_upper_bound() const {
-		return _u;
-	}
-
-	//return log2(number of registers used by HLL)
-	uint8_t get_hll_registers() const {
-		return _r;
-	}
-
-	//number of sampled factor _lengths (for each, we store a HLL sketch)
-	uint64_t get_number_of_samples(){
-		return _lengths.size();
-	}
-
-
-private:
-
-	vector<uint64_t> _fingerprints; // Karp-Rabin fingerprints of the windows
-
-	vector<uint64_t> _exponents; // z^_lengths[0], z^_lengths[1], z^_lengths[2], ...
-
-	//store a window of the last 
-	vector<char_t> _window;
-	uint64_t _window_head = 0;
-	vector<uint64_t> _window_bookmarks;
-
-	vector<hll_t> _hll_sketches;	// the count-distinct sketches
-	vector<uint64_t> _lengths;  // sampled k-mer _lengths corresponding to the sketches
-
-	//current stream length (or sum of streams _lengths if the sketch is the result of union of streams)
-	uint64_t _stream_length = 0; 
-
-	uint64_t _window_size;
-
-	uint64_t _z; // base of Karp-Rabin hashing (should be a random number in (0,q))
-	uint8_t _u;  // log2(upper bound to stream length)
-	double _a;   //logarithm base for the sampling of factor _lengths
-	uint8_t _r;  // log2(number of registers used by each HLL sketch)
-	uint64_t _e; // the first default_e k-mer _lengths are 1..default_e
-
+#include "internal/delta-stream.hpp"
+#include "internal/delta-stream-mt.hpp"
+
+// struct containing command line parameters and other globals
+struct Args {
+  //string outname;
+  bool stream = false;
+  bool delta = false;
+  bool merge = false;
+  uint8_t registers = 10;
+  int threads = 1;
+  string output = string();
+  string sketch1 = string();
+  string sketch2 = string();
+  bool verbose = false; // verbosity level
 };
 
+// function that prints the instructions for using the tool
+void print_help(char** argv) { 
+	cout << 
+		"Usage: " << argv[0] << " [options] [< input stream]" << endl << endl
 
+		<< "Tool to compute and compare compressibility sketches based on the delta measure." << endl << endl
 
+	 	<< "	-s, --stream" << endl 
+		<< "		Computes the sketch of the input stream (pipeline or redirect). Outputs delta(stream). Can be combined with -o to save the sketch." << endl << endl
+
+		<< "	-d s, --delta s" << endl
+		<< "		Given file s containing a sketch, outputs delta(s)." << endl << endl
+
+		<< "	-o s, --output s" << endl
+		<< "		Store the resulting sketch to file s (only for single thread so far)." << endl << endl
+		
+		<< "	-m s1 s2, --merge s1 s2" << endl
+		<< "		Merge the sketches contained in files s1 and s2. Outputs delta(s1,s2). The two input sketches must have the same parameters. Can be combined with -o to save the merged sketch." << endl << endl
+
+		//<< "	-c s1 s2, --ncd s1 s2" << endl
+		//<< "		Outputs the normalized compression distance (value in [0,1]) of sketches s1 and s2. The two input sketches must have the same parameters." << endl << endl
+
+		//<< "	-u u, --upper-bound u" << endl
+		//<< "		Logarithm in base 2 of the upper bound to the stream length (used with -s). The tool uses working space O(2^(u/2) * u) to build the sketch of the stream. Default: u = " << uint64_t(sketch<>::default_u) << "." << endl << endl
+
+		//<< "	-a a, --sample-rate a" << endl
+		//<< "		Sample rate. Samples log_a(stream length) factor _lengths. Must be a double a>1. Default: a = " << sketch<>::default_a << "." << endl << endl
+
+		//<< "	-e E, --exact E" << endl
+		//<< "		Factor _lengths {1,2,...,E} are always sampled. Default: E = " << sketch<>::default_e << endl << endl
+
+		<< "	-r R, --registers R" << endl
+		<< "		Logarithm in base 2 of the number of registers used by each HLL sketch. Default: R = " << uint64_t(sketch<>::default_r) << ". Range of R: [4,30]" << endl << endl
+
+		<< "	-t T, --threads T" << endl
+		<< "		Number of threads used to construct the sketches. Default: T = 1" << ". Range of R: [2...]" << endl << endl
+
+		<< endl;
+}
+
+// function for parsing the input arguments
+void parseArgs(int argc, char** argv, Args& arg) {
+
+	if(argc < 2){ print_help(argv); }
+
+	for(size_t i=1;i<argc;++i)
+	{
+
+		string param = argv[i];
+
+		if( param == "-s" or param == "--stream" )
+		{
+			arg.stream = true;
+			// read a stream
+		}
+		else if( param == "-r" or param == "--registers" )
+		{
+			i++;
+		    arg.registers = atoi( argv[i] );
+		    if( arg.registers < 4 or arg.registers > 30 )
+		    {
+			    cerr << "The number of register range is [4,30]." << endl;
+			    exit(1);
+		    }
+	  	}
+		else if( param == "-t" or param == "--threads" )
+		{
+			i++;
+		    arg.threads = atoi( argv[i] );
+		    if( arg.registers < 2 )
+		    {
+			    cerr << "Select at least 2 threads." << endl;
+			    exit(1);
+		     }
+	   	}
+		else if( param == "-d" or param == "--delta" )
+		{
+			i++;
+		    arg.sketch1 = string( argv[i] );
+		    arg.delta = true;
+	   	}
+		else if( param == "-m" or param == "--merge" )
+		{
+			i++;
+		    arg.sketch1 = string( argv[i++] );
+		    arg.sketch2 = string( argv[i] );
+		    arg.merge = true;
+	   	}
+		else if( param == "-o" or param == "--output" )
+		{
+			i++;
+	    	arg.output = string( argv[i] );
+	  	}
+    	else if( param == "-h" or param == "--help")
+		{
+		    print_help(argv); exit(-1);
+		    // fall through
+		}
+	    else if( param == "<")
+	    {
+	        break;
+	        // skip
+	    }
+	    else{
+	        cerr << "Unknown option. Use -h for help." << endl;
+	        exit(-1);
+	    }
+	    // check mode
+	    uint32_t counter = (int)arg.stream + (int)arg.delta + (int)arg.merge;
+	    if(counter != 1)
+	    {
+	    	cerr << "Please select one option out of stream|delta|merge" << endl;
+	    	exit(1);
+	    }
+	}
+}
+
+void extend_window(sketch_MT<> * s, vector<uint8_t> * buffer, uint64_t i)
+{
+	for(uint64_t j=0;j<i;++j)
+		s->extend_window((*buffer)[j]);
+}
+
+void extend_rlbwt(sketch_MT<> * s, vector<uint8_t> * buffer, uint64_t i)
+{
+	for(uint64_t j=0;j<i;++j)
+	{
+		s->extend_rlbwt((*buffer)[j]);
+		if(s->is_rlbwt_dropped())
+			break;
+	}
+}
+
+uint64_t loadBuffer(vector<uint8_t>& buffer, const uint64_t K)
+{
+	uint64_t i = 0;
+	
+	while(i < K)
+	{
+		uint8_t c = cin.get();
+		if(!cin){ break; }
+		buffer[i++] = c;
+	}
+
+	return i;
+}
+
+void print_stats(sketch<>& s)
+{
+	cout << "number of sampled lengths : " << s.get_number_of_samples() << endl;
+	cout << "stream length = " << s.stream_length() << endl;
+	cout << "delta = " << s.estimate_delta() << endl;
+	
+	ofstream output("delta.txt");
+	output << s.estimate_delta();
+	output.close();
+}
+
+double get_delta(sketch_MT<>& s)
+{
+	return s.estimate_delta();
+}
+
+void load_sketch(sketch<>& s, string sketch)
+{
+		vector<uint64_t> sampled_lengths;
+		sample_kmer_lengths(sampled_lengths,e,u,a);
+
+		ifstream input(sketch); 
+		s.load(input,&sampled_lengths);
+		input.close();
+}
 
 /*
 	build sketch on the input stream and save it to outfile, if outfile name is not empty
 */
-void stream_delta(string outfile = {}){
-
-	//TODO replace with random integer
+void stream_delta(uint8_t registers, string outfile = string()){
 
 	//sketch<HyperLogLog> s(324289893284831);	
-	sketch<> s(324289893284831);
+	uint64_t rand = random(1,255);
+	sketch<> s(rand,registers);
 
 	uint64_t i = 0;
-
 	while(cin){
 		uint8_t c = cin.get();
-		if(cin){
-			s.extend(c);
+		if(cin)
+		{
+			s.extend_window(c);
+			if(!s.is_rlbwt_dropped())
+			{
+				s.extend_rlbwt(c);
+			}
 			i++;
-			if(i%100000==0) cout << "Processed " << i << " characters." << endl;
+			//if(i%10000000==0) cout << "Processed " << i << " characters." << endl;
 		}
 	}
+	// print delta stats
+	print_stats(s);
+	// store sketches if needed
+	if(outfile != string())
+	{
+		ofstream os(outfile);
+		s.store(os);
+		os.close();
+	}
+}
 
-	cout << "number of sampled lengths : " << s.get_number_of_samples() << endl;
-	cout << "stream length = " << s.stream_length() << endl;
-	cout << "delta = " << s.estimate_delta() << endl;
+/*
+	build sketch (in a parallel way) on the input stream and save it to outfile, if outfile name is not empty
+*/
+void stream_delta_parallel(uint8_t registers, int32_t threads, string outfile = {}){
+	
+	uint64_t rand = random(1,255);
 
+	vector<thread> thread_list;
+	thread rlbwt_thread;
+	vector<sketch_MT<>> sketch_list;
+
+	const uint32_t K = 1000000;
+	vector<uint8_t> buffer(K,0);
+
+	vector<uint64_t> sampled_lengths;
+	sample_kmer_lengths(sampled_lengths,e,u,a);
+	uint64_t window_size = compute_window_size(32);
+	uint64_t no_sampled = sampled_lengths.size();
+
+	uint64_t i = 0;
+	for(;i<no_sampled;++i)
+	{
+		if( sampled_lengths[i] > window_size )
+			break;
+	}
+
+	double no_k_thread = round(i/(double)(threads-1));
+	if( no_k_thread*(threads-1) >= i ){ threads--; }
+
+	cout << "Sampled lengths: " << no_sampled << endl;
+	cout << "Sampled lengths <= window: " << i << endl;
+	cout << "k values per thread: " << no_k_thread << endl;
+
+	// initialize k mer lengths for each thread
+	vector< vector<uint64_t> * > length_lists;
+	uint64_t y = 0;
+	for(uint64_t t=0;t<(threads-2);++t)
+	{	
+		vector<uint64_t>* l = new vector<uint64_t>(no_k_thread,0);
+		for(uint64_t j=0;j<no_k_thread;++j){ (*l)[j] = sampled_lengths[y++]; }
+		length_lists.push_back(l);
+	}
+	vector<uint64_t>* l = new vector<uint64_t>(i-y,0);
+
+	// last list may be larger than previous ones
+	for(uint64_t j=y;j<i;++j)
+	{
+		(*l)[j-y] = sampled_lengths[j];
+	}
+	length_lists.push_back(l);
+
+	// rlbwt list
+	l = new vector<uint64_t>(sampled_lengths.size()-i,0);
+	for(uint64_t j=i;j<sampled_lengths.size();++j)
+	{
+		(*l)[j-i] = sampled_lengths[j];
+	}
+	length_lists.push_back(l);
+
+	// init threads and sketches
+	sketch_list.resize(threads-1);
+	thread_list.resize(threads-1);
+	for(uint64_t i=0;i<(threads-1);++i)
+	{
+		// init ith sketch
+		uint64_t curr_window = (*length_lists[i])[length_lists[i]->size()-1];
+		//uint64_t curr_window = window_size;
+		sketch_list[i] = sketch_MT<>(rand,registers,curr_window,length_lists[i]);
+	}
+	sketch_MT<> rlbwt_s(rand,registers,0,length_lists[threads-1]);
+
+	// main execuction
+	i = 0;
+	while(true)
+	{
+		uint64_t loadedChars = loadBuffer(buffer,K);
+		if( loadedChars == 0 ){ break; }
+		for(uint64_t j=0;j<(threads-1);++j)
+		{
+			thread_list[j] = thread(extend_window, &sketch_list[j], &buffer, loadedChars);
+		}
+
+		if(!rlbwt_s.is_rlbwt_dropped())
+		{
+			thread t = thread(extend_rlbwt, &rlbwt_s, &buffer, loadedChars);
+			t.join();
+		}
+
+		// threads sincronization
+		for(uint64_t j=0;j<(threads-1);++j)
+		{
+			thread_list[j].join();
+		}
+
+		i += loadedChars;
+		//if(i%K==0) cout << "Processed " << i << " characters." << endl;
+	}
+
+	double delta = 0;
+	for(uint64_t j=0;j<threads-1;++j)
+	{
+		delta = max(delta,get_delta(sketch_list[j]));
+	}
+	delta = max(delta,get_delta(rlbwt_s));
+	
+	cout << "number of sampled lengths : " << no_sampled << endl;
+	cout << "stream length = " << i << endl;
+	cout << "delta = " << delta << endl;
+
+	ofstream output("delta.txt");
+	output << delta;
+	output.close();
 }
 
 int main(int argc, char* argv[]){
 
-    if (argc < 2) {
-        cout	<< "Usage: " << argv[0] << " [options] [< input stream]" << endl << endl
+    Args arg;
+    parseArgs(argc, argv, arg);
 
-        		<< "Tool to compute and compare compressibility sketches based on the delta measure." << endl << endl
+    if(arg.stream)
+    {
+	    if( arg.threads > 1 )
+	    {
+	    	stream_delta_parallel(arg.registers,arg.threads);
+	    }
+	    else
+	    {
+	    	stream_delta(arg.registers,arg.output);
+	    }
+	}
+	else if(arg.delta)
+	{
+			sketch<> s;
+			load_sketch(s,arg.sketch1);
+			print_stats(s);
+	}
+	else if(arg.merge)
+	{
+			sketch<> s1, s2;
+			load_sketch(s1,arg.sketch1);
+			load_sketch(s2,arg.sketch2);
+			s1.merge(s2);
 
-        	 	<< "	-s, --stream" << endl 
-        		<< "		Computes the sketch of the input stream (pipeline or redirect). Outputs delta(stream). Can be combined with -o to save the sketch." << endl << endl
+			if(arg.output != string())
+			{
+				ofstream os(arg.output);
+				s1.store(os);
+				os.close();
+			}
+	}
 
-        		<< "	-d s, --delta s" << endl
-        		<< "		Given file s containing a sketch, outputs delta(s)." << endl << endl
-
-        		<< "	-o s, --output s" << endl
-        		<< "		Store the resulting sketch to file s." << endl << endl
-        		
-        		<< "	-m s1 s2, --merge s1 s2" << endl
-        		<< "		Merge the sketches contained in files s1 and s2. Outputs delta(s1,s2). The two input sketches must have the same parameters. Can be combined with -o to save the merged sketch." << endl << endl
-
-        		<< "	-c s1 s2, --ncd s1 s2" << endl
-        		<< "		Outputs the normalized compression distance (value in [0,1]) of sketches s1 and s2. The two input sketches must have the same parameters." << endl << endl
-
-        		<< "	-u u, --upper-bound u" << endl
-        		<< "		Logarithm in base 2 of the upper bound to the stream length (used with -s). The tool uses working space O(2^(u/2) * u) to build the sketch of the stream. Default: u = " << uint64_t(sketch<>::default_u) << "." << endl << endl
-
-        		<< "	-a a, --sample-rate a" << endl
-        		<< "		Sample rate. Samples log_a(stream length) factor _lengths. Must be a double a>1. Default: a = " << sketch<>::default_a << "." << endl << endl
-
-        		<< "	-e E, --exact E" << endl
-        		<< "		Factor _lengths {1,2,...,E} are always sampled. Default: E = " << sketch<>::default_e << endl << endl
-
-
-        		<< "	-r R, --registers R" << endl
-        		<< "		Logarithm in base 2 of the number of registers used by each HLL sketch. Default: R = " << uint64_t(sketch<>::default_r) << ". Range of R: [4,30]" << endl << endl
-
-        		<< endl;
-        return 1;
-    }
-	
-
-    if(strcmp(argv[1], "-s") == 0 or strcmp(argv[1], "--stream")){
-
-    	stream_delta();
-
-    }
-
+    return 0;
 }

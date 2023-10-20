@@ -8,13 +8,18 @@ endif()
 
 #set( CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/.. )
 
+set (CMAKE_CXX_STANDARD 14)
+
 project (substring-complexity)
 
 include_directories(${PROJECT_SOURCE_DIR})
 include_directories(~/include) #SDSL headers are here
+include_directories(${PROJECT_SOURCE_DIR}/include/DYNAMIC/include)
+include_directories(${PROJECT_SOURCE_DIR}/include/hopscotch-map/include)
 INCLUDE_DIRECTORIES(include/cpp-HyperLogLog/include include/cpp-HyperLogLog/extlib/igloo include/cpp-HyperLogLog/extlib/igloo-TapTestListener)
 
 LINK_DIRECTORIES(~/lib) #SDSL lib are here
+#LINK_DIRECTORIES(~/count) #SDSL lib are here
 
 message("Building in ${CMAKE_BUILD_TYPE} mode")
 
@@ -25,6 +30,6 @@ set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-g -ggdb -Ofast -fstrict-aliasing -march=nat
 add_executable(delta delta.cpp)
 add_executable(delta-stream delta-stream.cpp)
 TARGET_LINK_LIBRARIES(delta sdsl)
-TARGET_LINK_LIBRARIES(delta-stream sdsl)
+TARGET_LINK_LIBRARIES(delta-stream sdsl pthread)
 TARGET_LINK_LIBRARIES(delta divsufsort)
 TARGET_LINK_LIBRARIES(delta divsufsort64)

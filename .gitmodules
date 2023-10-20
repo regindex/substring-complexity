@@ -1,3 +1,6 @@
 [submodule "include/cpp-HyperLogLog"]
 	path = include/cpp-HyperLogLog
 	url = https://github.com/hideo55/cpp-HyperLogLog
+[submodule "include/DYNAMIC"]
+	path = include/DYNAMIC
+	url = https://github.com/xxsds/DYNAMIC.git

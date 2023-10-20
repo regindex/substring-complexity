@@ -43,3 +43,15 @@ To compute the exact measures using linear working space, run
 To compute an approximation of delta using sublinear working space, run
 
 >  delta-stream -s < file
+
+To compute an approximation of delta using sublinear working space and store the sketch, run
+
+>  delta-stream -s -o "output_path" < file
+
+To compute an approximation of delta given a stored sketch, run
+
+>  delta-stream -d "sketch_path"
+
+To merge two sketches and store the result, run
+
+>  delta-stream -m "sketch_path_1" "sketch_path_2" -o "merged_sketch_path"
