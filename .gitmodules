@@ -4,3 +4,6 @@
 [submodule "include/DYNAMIC"]
 	path = include/DYNAMIC
 	url = https://github.com/xxsds/DYNAMIC.git
+[submodule "include/hopscotch-map"]
+	path = include/hopscotch-map
+	url = https://github.com/Tessil/hopscotch-map.git
