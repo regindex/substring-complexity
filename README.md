@@ -55,3 +55,7 @@ To compute an approximation of delta given a stored sketch, run
 To merge two sketches and store the result, run
 
 >  delta-stream -m "sketch_path_1" "sketch_path_2" -o "merged_sketch_path"
+
+To compute the approximation of the delta NCD of two sketches, run
+
+>  delta-stream -c "sketch_path_1" "sketch_path_2"

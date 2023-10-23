@@ -10,12 +10,11 @@ struct Args {
   //string outname;
   bool stream = false;
   bool delta = false;
-  bool merge = false;
+  bool merge = false, ncd = false;
   uint8_t registers = 10;
   int threads = 1;
   string output = string();
-  string sketch1 = string();
-  string sketch2 = string();
+  string sketch1 = string(), sketch2 = string();
   bool verbose = false; // verbosity level
 };
 
@@ -38,8 +37,8 @@ void print_help(char** argv) {
 		<< "	-m s1 s2, --merge s1 s2" << endl
 		<< "		Merge the sketches contained in files s1 and s2. Outputs delta(s1,s2). The two input sketches must have the same parameters. Can be combined with -o to save the merged sketch." << endl << endl
 
-		//<< "	-c s1 s2, --ncd s1 s2" << endl
-		//<< "		Outputs the normalized compression distance (value in [0,1]) of sketches s1 and s2. The two input sketches must have the same parameters." << endl << endl
+		<< "	-c s1 s2, --ncd s1 s2" << endl
+		<< "		Outputs the normalized compression distance (value in [0,1]) of sketches s1 and s2. The two input sketches must have the same parameters." << endl << endl
 
 		//<< "	-u u, --upper-bound u" << endl
 		//<< "		Logarithm in base 2 of the upper bound to the stream length (used with -s). The tool uses working space O(2^(u/2) * u) to build the sketch of the stream. Default: u = " << uint64_t(sketch<>::default_u) << "." << endl << endl
@@ -62,7 +61,7 @@ void print_help(char** argv) {
 // function for parsing the input arguments
 void parseArgs(int argc, char** argv, Args& arg) {
 
-	if(argc < 2){ print_help(argv); }
+	if(argc < 2){ print_help(argv); exit(1); }
 
 	for(size_t i=1;i<argc;++i)
 	{
@@ -76,63 +75,70 @@ void parseArgs(int argc, char** argv, Args& arg) {
 		}
 		else if( param == "-r" or param == "--registers" )
 		{
-			i++;
+				i++;
 		    arg.registers = atoi( argv[i] );
 		    if( arg.registers < 4 or arg.registers > 30 )
 		    {
 			    cerr << "The number of register range is [4,30]." << endl;
 			    exit(1);
 		    }
-	  	}
+	  }
 		else if( param == "-t" or param == "--threads" )
 		{
-			i++;
+				i++;
 		    arg.threads = atoi( argv[i] );
 		    if( arg.registers < 2 )
 		    {
 			    cerr << "Select at least 2 threads." << endl;
 			    exit(1);
 		     }
-	   	}
+	  }
 		else if( param == "-d" or param == "--delta" )
 		{
-			i++;
+				i++;
 		    arg.sketch1 = string( argv[i] );
 		    arg.delta = true;
-	   	}
+	  }
+		else if( param == "-c" or param == "--ncd" )
+		{
+				i++;
+		    arg.sketch1 = string( argv[i++] );
+		    arg.sketch2 = string( argv[i] );
+		    arg.ncd = true;
+	  }
 		else if( param == "-m" or param == "--merge" )
 		{
-			i++;
+				i++;
 		    arg.sketch1 = string( argv[i++] );
 		    arg.sketch2 = string( argv[i] );
 		    arg.merge = true;
-	   	}
+	  }
 		else if( param == "-o" or param == "--output" )
 		{
-			i++;
+				i++;
 	    	arg.output = string( argv[i] );
-	  	}
-    	else if( param == "-h" or param == "--help")
+	  }
+    else if( param == "-h" or param == "--help")
 		{
 		    print_help(argv); exit(-1);
 		    // fall through
 		}
-	    else if( param == "<")
-	    {
-	        break;
-	        // skip
-	    }
-	    else{
-	        cerr << "Unknown option. Use -h for help." << endl;
-	        exit(-1);
-	    }
-	    // check mode
-	    uint32_t counter = (int)arg.stream + (int)arg.delta + (int)arg.merge;
-	    if(counter != 1)
-	    {
-	    	cerr << "Please select one option out of stream|delta|merge" << endl;
-	    	exit(1);
-	    }
+    else if( param == "<")
+    {
+        break;
+        // skip
+    }
+    else{
+        cerr << "Unknown option. Use -h for help." << endl;
+        exit(-1);
+    }
+    // check mode
+    uint32_t counter = (int)arg.stream + (int)arg.delta + (int)arg.merge + (int)arg.ncd;
+    if(counter != 1)
+    {
+    	cerr << "Please select one option out of stream|delta|merge|ncd" << endl;
+    	exit(1);
+    }
 	}
 }
 
@@ -166,10 +172,10 @@ uint64_t loadBuffer(vector<uint8_t>& buffer, const uint64_t K)
 	return i;
 }
 
-void print_stats(sketch<>& s)
+void print_delta(sketch<>& s)
 {
-	cout << "number of sampled lengths : " << s.get_number_of_samples() << endl;
-	cout << "stream length = " << s.stream_length() << endl;
+	//cout << "number of sampled lengths : " << s.get_number_of_samples() << endl;
+	//cout << "stream length = " << s.stream_length() << endl;
 	cout << "delta = " << s.estimate_delta() << endl;
 	
 	ofstream output("delta.txt");
@@ -177,9 +183,20 @@ void print_stats(sketch<>& s)
 	output.close();
 }
 
-double get_delta(sketch_MT<>& s)
+template<typename sketch>
+double get_delta(sketch& s)
 {
 	return s.estimate_delta();
+}
+
+void print_ncd(sketch<>& s, double mind, double maxd)
+{
+	double ncd = (get_delta(s) - mind)/maxd;
+	cout << "delta NCD = " << ncd << endl;
+	
+	ofstream output("ncd.txt");
+	output << ncd;
+	output.close();
 }
 
 void load_sketch(sketch<>& s, string sketch)
@@ -216,7 +233,8 @@ void stream_delta(uint8_t registers, string outfile = string()){
 		}
 	}
 	// print delta stats
-	print_stats(s);
+	cout << "Stream length: " << i << endl;
+	print_delta(s);
 	// store sketches if needed
 	if(outfile != string())
 	{
@@ -355,27 +373,42 @@ int main(int argc, char* argv[]){
 	    {
 	    	stream_delta(arg.registers,arg.output);
 	    }
-	}
-	else if(arg.delta)
-	{
-			sketch<> s;
-			load_sketch(s,arg.sketch1);
-			print_stats(s);
-	}
-	else if(arg.merge)
-	{
-			sketch<> s1, s2;
-			load_sketch(s1,arg.sketch1);
-			load_sketch(s2,arg.sketch2);
-			s1.merge(s2);
+		}
+		else if(arg.delta)
+		{
+				sketch<> s;
+				load_sketch(s,arg.sketch1);
+				print_delta(s);
+		}
+		else if(arg.merge)
+		{
+				sketch<> s1, s2;
+				load_sketch(s1,arg.sketch1);
+				load_sketch(s2,arg.sketch2);
+				s1.merge(s2);
 
-			if(arg.output != string())
-			{
-				ofstream os(arg.output);
-				s1.store(os);
-				os.close();
-			}
-	}
+				if(arg.output != string())
+				{
+					ofstream os(arg.output);
+					s1.store(os);
+					os.close();
+				}
+		}
+		else if(arg.ncd)
+		{
+				sketch<> s1, s2;
+				load_sketch(s1,arg.sketch1);
+				load_sketch(s2,arg.sketch2);
+				double d1 = get_delta(s1);
+				double d2 = get_delta(s2);
+				// compute max min
+				double mind = min(d1,d2);
+				double maxd = max(d1,d2);
+				// compute delta(s1,s2)
+				s1.merge(s2);
+				print_ncd(s1,mind,maxd);
+				//cout << "delta NCD = " << (get_delta(s1) - mind)/maxd << endl;
+		}
 
     return 0;
 }

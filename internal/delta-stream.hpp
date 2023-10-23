@@ -37,8 +37,8 @@ public:
         // sample a k value for each sketch
         sample_kmer_lengths(_lengths,_e,_u,_a);
 
-        //std::cout << "Number of sampled lengths: " << _lengths.size() << "\n";
-        //std::cout << "Number of registers: " << (int)_r << "\n";
+        std::cout << "Number of sampled lengths: " << _lengths.size() << "\n";
+        std::cout << "Number of registers: " << (int)_r << "\n";
         // init sketches
         _hll_sketches = vector<hll_t>(_lengths.size(),{_r});
 
