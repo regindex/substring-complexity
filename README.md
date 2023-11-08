@@ -44,9 +44,13 @@ To compute an approximation of delta using sublinear working space, run
 
 >  delta-stream -s < file
 
-To compute an approximation of delta using sublinear working space and store the sketch, run
+To compute an approximation of delta on a stream using sublinear working space and store the sketch, run
 
 >  delta-stream -s -o "output_path" < file
+
+or
+
+> some_command_generating_output | delta-stream -s -o "output_path"
 
 To compute an approximation of delta given a stored sketch, run
 
