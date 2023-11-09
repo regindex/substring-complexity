@@ -2,6 +2,7 @@
 #define DELTA_STRAM_HPP_
 
 #include "common.hpp"
+#include "prime.hpp"
 
 //template on the underlying count-distinct sketch and on the char type
 template<class hll_t = HyperLogLogHIP, class char_t = uint8_t>
@@ -9,25 +10,19 @@ class sketch{
 
 public:
 
-    //total sketch size is <= (_e + (_u/log2(a))) * 2^_r HLL registers 
-    //(_u/log2(a) = log_a(U), where U=2^_u is the upper bound to the stream's length)
-    static constexpr uint64_t drop_threshold_ = 100000;
-
-    //static constexpr uint64_t q = (uint64_t(1)<<61) - 1; // prime for Karp-Rabin fingerprinting (M61)
-    //static constexpr uint64_t q = (uint64_t(1)<<55) + 3; // first prime number after 2^55
-    static constexpr uint64_t q = (uint64_t(1)<<54) + (uint64_t(1)<<7) + 31; // first prime number after 2^54
+    static constexpr uint64_t _q = (uint64_t(1)<<54) + (uint64_t(1)<<7) + 31; // prime number for Karp-Rabin fingerprinting (54 bits)
+    static constexpr uint8_t z = 255; // base for Karp-Rabin fingerprinting
 
     sketch(){// empty constructor
     }
 
     // first constructor computing a list of sampled k values
-    sketch( Args& arg )
+    sketch( Args& arg, uint64_t Q): q(Q)
     {
-        //TO DO adjust the window size once theory is ready!!
-        //for now, sqrt(max stream length)*log(max stream length)
+        // compute the windows size
         _window_size = compute_window_size(arg.u);
-        // set KR-base
-        _z = arg.z;
+        drop_threshold_ = _window_size;
+        _window_size *= 8;
         // set logarithm base
         _a = arg.a;
         // set sampling parameter
@@ -55,7 +50,6 @@ public:
             assert(_lengths.size() == _k);
         }
         cout << "Number of sampled lengths: " << _lengths.size() << endl;
-        //cout << "Number of registers: " << (int)_r << endl;
 
         // sketch initialization
         _hll_sketches = vector<hll_t>(_lengths.size(),{arg.registers});
@@ -75,17 +69,18 @@ public:
         // exponents initialization
         for(uint64_t i=0;i<_lengths.size();++i){
             assert(i<_exponents.size());
-            _exponents[i] = fexp(_z,_lengths[i]-1,q); //fast exponentiation: z^(_lengths[i]-1) mod q
+            _exponents[i] = fexp(z,_lengths[i]-1,q); //fast exponentiation: z^(_lengths[i]-1) mod q
         }
     }
 
     // 2nd constructor taking a list of sampling lengths
     sketch( Args& arg, 
             uint64_t window_size,
-            vector<uint64_t> * kmer_lengths): _window_size(window_size), _lengths(*kmer_lengths)
+            vector<uint64_t> * kmer_lengths,
+            uint64_t Q): _window_size(window_size), _lengths(*kmer_lengths), q(Q)
     {
-        // set KR-base
-        _z = arg.z;
+        // set rlbwt max size
+        drop_threshold_ = _window_size/8;
         // set number of registers
         _r = arg.registers;
         // initialize sketches
@@ -111,7 +106,7 @@ public:
         // exponents initialization
         for(uint64_t i=0;i<_lengths.size();++i){
             assert(i<_exponents.size());
-            _exponents[i] = fexp(_z,_lengths[i]-1,q); //fast exponentiation: z^(_lengths[i]-1) mod q
+            _exponents[i] = fexp(z,_lengths[i]-1,q); //fast exponentiation: z^(_lengths[i]-1) mod q
         }
     }
  
@@ -135,8 +130,8 @@ public:
 
         //append new character to all fingerprints:
         //since we have already removed the oldest character (done in previous if),
-        //we only need to left-shift fingerprint (multiply by _z) and add c
-        _fingerprints[i] = (_fingerprints[i] * _z + c) % q;
+        //we only need to left-shift fingerprint (multiply by z) and add c
+        _fingerprints[i] = (_fingerprints[i] * z + c) % q;
 
         //_stream_length increased by 1 in the fingerprints: if the updated stream length
         // is >= the current k-mer length, insert the k-mer fingerprint in the HLL sketch
@@ -146,11 +141,48 @@ public:
         }
     }
 
-    void extend_window(char_t c)
+    // update fingerprints using const prime number
+    inline void update_fingerprint_window(uint64_t i, char_t c, bool f=false)
+    {
+        
+        if(_stream_length >= _lengths[i]){
+        
+            char_t b = _window[_bookmarks[i]]; //get oldest character
+
+            if( f )
+            {
+                uint64_t remove = (b * _exponents[i]) % _q;
+                _fingerprints[i] = ((_fingerprints[i] + _q) - remove) % _q;
+            }
+            else
+            {
+                uint64_t remove = (b * _exponents[i]) % q;
+                _fingerprints[i] = ((_fingerprints[i] + q) - remove) % q;
+            }
+
+            // shift forward the bookmark
+            _bookmarks[i] = (_bookmarks[i]+1) % _window_size;
+
+        }
+
+        //append new character to all fingerprints.
+        if( f )
+            _fingerprints[i] = (_fingerprints[i] * z + c) % _q;
+        else
+            _fingerprints[i] = (_fingerprints[i] * z + c) % q;
+
+        //_stream_length increased by 1.
+        if(_stream_length+1 >= _lengths[i])
+        {
+            _hll_sketches[i].add(reinterpret_cast<char*>(&_fingerprints[i]),sizeof(_fingerprints[i]));
+        }
+    }
+
+    void extend_window(char_t c, bool f=false)
     {
         for(uint64_t i=0;i<_k;++i)
         {
-            update_fingerprint_window(i,c);
+            update_fingerprint_window(i,c,f);
         }
 
         //if empty stream, leave _window_head to 0 (_window_head always points to
@@ -164,7 +196,7 @@ public:
         _stream_length++;
     }
 
-    inline void update_fingerprint_rlbwt(uint64_t i, char_t c)
+    inline void update_fingerprint_rlbwt(uint64_t i, char_t c, bool f=false)
     {
         // remove from the active fingerprints the oldest character
         // and move forward their iterators   
@@ -172,8 +204,16 @@ public:
          
             char_t b = _rlbwt->at(_bookmarks[i]); //get oldest character
 
-            uint64_t remove = (b * _exponents[i]) % q;
-            _fingerprints[i] = ((_fingerprints[i] + q) - remove) % q;
+            if( f )
+            {
+                uint64_t remove = (b * _exponents[i]) % _q;
+                _fingerprints[i] = ((_fingerprints[i] + _q) - remove) % _q;
+            }
+            else
+            {
+                uint64_t remove = (b * _exponents[i]) % q;
+                _fingerprints[i] = ((_fingerprints[i] + q) - remove) % q;
+            }
 
             // shift forward the bookmark
             _bookmarks[i] = _rlbwt->LF(_bookmarks[i]);
@@ -185,8 +225,11 @@ public:
 
         //append new character to all fingerprints:
         //since we have already removed the oldest character (done in previous if),
-        //we only need to left-shift fingerprint (multiply by _z) and add c
-        _fingerprints[i] = (_fingerprints[i] * _z + c) % q;
+        //we only need to left-shift fingerprint (multiply by z) and add c
+        if( f )
+            _fingerprints[i] = (_fingerprints[i] * z + c) % _q;
+        else
+            _fingerprints[i] = (_fingerprints[i] * z + c) % q;
 
         //_stream_length increased by 1 in the fingerprints: if the updated stream length
         // is >= the current k-mer length, insert the k-mer fingerprint in the HLL sketch
@@ -196,7 +239,7 @@ public:
         }
     }
 
-    void extend_rlbwt(char_t c, bool d = false)
+    void extend_rlbwt(char_t c, bool d=false, bool f=false)
     {
         // decrease stream length if we have already inserted a character
         // in the window (for single thread execution)
@@ -204,7 +247,7 @@ public:
 
         for(uint64_t i=_k;i<get_number_of_samples();++i)
         {
-            update_fingerprint_rlbwt(i,c);
+            update_fingerprint_rlbwt(i,c,f);
         }
 
         //add new character to the rlbwt
@@ -268,6 +311,25 @@ public:
             delta = max(delta,_hll_sketches[i].estimate()/_lengths[i]);
 
         return delta;
+    }
+
+    //get estimate of measure delta and corresponding argmax
+    pair<double,uint64_t> estimate_delta_argmax() const {
+        
+        uint64_t argmax = 0;
+        double delta = 0, curr = 0;
+
+        for(uint64_t i=0;i<_lengths.size();++i)
+        {
+            curr = _hll_sketches[i].estimate()/_lengths[i];
+            if( curr > delta )
+            {
+                delta = curr;
+                argmax = _lengths[i];
+            }
+        }
+
+        return make_pair(delta,argmax);
     }
 
     //store sketch to output stream
@@ -375,12 +437,14 @@ private:
 
     uint64_t _stream_length = 0; //current stream length (or sum of streams _lengths if the sketch is the result of union of streams)
     uint64_t _window_size; // kmer window size
+    uint64_t drop_threshold_; // kmer window size
 
-    uint64_t _z; // base of Karp-Rabin hashing (should be a random number in (0,q))
+    uint64_t q; // user defined prime number
+
     uint8_t _u;  // log2(upper bound to stream length)
     double _a;   //logarithm base for the sampling of factor _lengths
     uint8_t _r;  // log2(number of registers used by each HLL sketch)
-    uint64_t _e; // the sampling patameter
+    double _e; // the sampling patameter
     uint32_t _k; // number of k-mer _lengths smaller than _window_size
 };
 

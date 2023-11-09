@@ -80,8 +80,9 @@ int main(int argc, char* argv[])
     cout << "ratio n/delta = " << double(lcp.size() - 1)/delta << endl; 
     cout << "argmax_k(d_k/k) = " << argmax << endl; 
     cout << "length of longest repeated substring = " << lrs << endl; 
-
+    /*
     ofstream output("exact_delta.txt");
     output << int(delta);
     output.close();
+    */
 }

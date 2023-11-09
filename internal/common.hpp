@@ -14,20 +14,22 @@ using namespace std;
 using namespace hll;
 using namespace dyn; 
 
-const uint8_t min_k_thread = 4;
-
 // struct containing command line parameters and other globals
 struct Args
 {
-  uint64_t e = 20, u = 32;
+  double e = 20;
+  uint64_t u = 26;
   double a = 1.2;
-  uint8_t registers = 10, z=0;
+  uint8_t registers = 10;
   bool stream = false, rlbwt = false, merge = false;
   bool delta = false, ncd = false;
+  bool fast = false;
   int threads = 1;
   string outfile = string();
   string sketch1 = string(), sketch2 = string();
-  int precision = 3;
+  int precision = 2;
+  uint64_t prime = 0;
+  uint64_t buffer = 1;
   bool verbose = false; 
 };
 
@@ -36,19 +38,19 @@ struct conf{
 
     conf(){}
 
-    conf(uint64_t e, double a, uint8_t r, int p): _e(e), _a(a), _r(r), _p(p)
+    conf(double e, double a, uint8_t r, int p): _e(e), _a(a), _r(r), _p(p)
     {}
 
-    uint64_t _e = 10;double _a = 1.4;uint8_t _r = 10;int _p=4;
+    double _e = 10;double _a = 1.4;uint8_t _r = 10;int _p=4;
 };
 // configurations
-vector<conf> conf_list{ conf(9,1.5,12,4), conf(15,1.3,12,4), conf(10,1.4,14,3), conf(14,1.3,14,3), 
-                        conf(11,1.30,16,2), conf(15,1.2,16,2), conf(15,1.1,18,1) };
-
-template<typename T>
-T random(T range_from, T range_to) {
-    std::random_device                  rand_dev;
-    std::mt19937                        generator(rand_dev());
+//vector<conf> conf_list{ conf(9,1.5,12,4), conf(15,1.3,12,4), conf(10,1.4,14,3), conf(14,1.3,14,3), 
+vector<conf> conf_list{ conf(7.5,1.45,12,4), conf(10.5,1.35,14,3), conf(11,1.28,16,2), conf(15,1.2,16,2), conf(15,1.1,18,1) };
+// 7.5,1.45
+template<typename T, typename M>
+T uniform_random(T range_from, T range_to, M seed) {
+    //std::random_device                  rand_dev;
+    std::mt19937                        generator(seed);
     std::uniform_int_distribution<T>    distr(range_from, range_to);
     return distr(generator);
 }
@@ -69,7 +71,7 @@ uint64_t fexp(uint64_t z, uint64_t e, uint64_t q){
 }
 
 // sample kmer lengths
-void kmer_lengths_sampling(vector<uint64_t>& lengths, uint64_t e, uint64_t u, double a, uint64_t p)
+void kmer_lengths_sampling(vector<uint64_t>& lengths, double e, uint64_t u, double a, uint64_t p)
 {
     uint64_t sampled_lenghts = e;
     uint64_t U = uint64_t(1)<<u;
@@ -77,6 +79,8 @@ void kmer_lengths_sampling(vector<uint64_t>& lengths, uint64_t e, uint64_t u, do
     uint64_t k = 1; //last sampled length
     // up to e*2^1
     uint64_t i=1, j=2;
+    if( p%2 != 0 ){ j--; }
+    if( p==1 ){ i--; }
     //uint64_t i=0, j=0;
     while( i++ < e*(2) )
     {
@@ -101,10 +105,10 @@ void kmer_lengths_sampling(vector<uint64_t>& lengths, uint64_t e, uint64_t u, do
     exp = 1;
     k = e*(2*2*2);
     while(exp < U){
-        if(uint64_t(exp) > k and uint64_t(exp) > e){
+        if(ceil(exp) > k and ceil(exp) > e){
             lengths.push_back(exp);
             i++;
-            k = exp;
+            k = ceil(exp);
         }
         exp *= a;
     }
@@ -114,5 +118,7 @@ static const uint64_t compute_window_size(uint64_t u)
 {
     return (uint64_t(1)<<(u/2))*u;
 }
+
+static constexpr uint8_t min_k_thread = 1;
 
 #endif

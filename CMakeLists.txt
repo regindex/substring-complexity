@@ -16,6 +16,7 @@ include_directories(${PROJECT_SOURCE_DIR})
 include_directories(~/include) #SDSL headers are here
 include_directories(${PROJECT_SOURCE_DIR}/include/DYNAMIC/include)
 include_directories(${PROJECT_SOURCE_DIR}/include/hopscotch-map/include)
+#include_directories(${PROJECT_SOURCE_DIR}/include/miller-rabin)
 INCLUDE_DIRECTORIES(include/cpp-HyperLogLog/include include/cpp-HyperLogLog/extlib/igloo include/cpp-HyperLogLog/extlib/igloo-TapTestListener)
 
 LINK_DIRECTORIES(~/lib) #SDSL lib are here

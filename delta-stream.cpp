@@ -14,17 +14,14 @@ void print_help(char** argv) {
 	 	<< "	-s, --stream" << endl 
 		<< "		Computes the sketch of the input stream (pipeline or redirect). Outputs delta(stream). Can be combined with -o to save the sketch." << endl 
 
-	 	<< "	-z, --base" << endl 
-		<< "		Set the base for KR-hashing. Range of z: [1,255]. Default: Random number in [1,...,255]" << endl 
-
 	 	<< "	-l, --rlbwt" << endl 
 		<< "		Keep a dynamic run-length BWT to compute the fingerpints for k larger than the maximum window size. Default: False" << endl 
 
 		<< "	-d s, --delta s" << endl
 		<< "		Given file s containing a sketch, outputs delta(s)." << endl 
 
-		<< "	-o s, --output s" << endl
-		<< "		Store the resulting sketch to file s (only for single thread so far)." << endl 
+		<< "	-o O, --output-file O" << endl
+		<< "		Store the resulting sketch to file O." << endl 
 		
 		<< "	-m s1 s2, --merge s1 s2" << endl
 		<< "		Merge the sketches contained in files s1 and s2. Outputs delta(s1,s2). The two input sketches must have the same parameters. Can be combined with -o to save the merged sketch." << endl 
@@ -32,24 +29,23 @@ void print_help(char** argv) {
 		<< "	-c s1 s2, --ncd s1 s2" << endl
 		<< "		Outputs the normalized compression distance (value in [0,1]) of sketches s1 and s2. The two input sketches must have the same parameters." << endl 
 
-		<< "	-u u, --upper-bound u" << endl
-		<< "		Logarithm in base 2 of the upper bound to the stream length (used with -s). The tool uses working space O(2^(u/2) * u) to build the sketch of the stream. Default: u = 32" << endl 
-
-		//<< "	-a a, --sample-rate a" << endl
-		//<< "		Sample rate. Samples log_a(stream length) factor _lengths. Must be a double a>1. Default: a = 1.2" << endl << endl
-
-		//<< "	-e E, --exact E" << endl
-		//<< "		Factor _lengths {1,2,...,E} are always sampled. Default: E = 20" << endl << endl
-
-		//<< "	-r R, --registers R" << endl
-		//<< "		Logarithm in base 2 of the number of registers used by each HLL sketch. Default: R = 10" << ". Range of R: [4,30]." << endl << endl
+		<< "	-u U, --stream-length U" << endl
+		<< "		Length of the stream if known (used with -s). The tool uses working space O(2^(log(u)/2) * log(u)) to build the sketch of the stream. Default: log(u) = 26" << endl 
 
 		<< "	-p P, --precision P" << endl
-		<< "		Sketch precision, higher values result in a more precise delta estimation. Range of p [1,7]. Default: p = 3" << endl 
+		<< "		Sketch precision, higher values result in a more precise delta estimation. Range of p [1,5]. Default: p = 2" << endl
+
+		<< "	-e E, --prime E" << endl
+		<< "		Prime number for KR-fingerprint computation. Range of E [1,2^{55}-1]. Default: randomly sampled prime number of 54 bits" << endl 
+
+		<< "	-f, --fast" << endl
+		<< "		Run streaming algorithm in the fastest mode and minimum memory footprint, the -e and --prime flags will be disabled. Default: False" << endl 
 
 		<< "	-t T, --threads T" << endl
 		<< "		Number of threads used to construct the sketches. Default: T = 1" << endl 
 
+	 	<< "	-b B, --buffer-size B" << endl 
+		<< "		Buffer size for multithreading mode (in MB). Default: 1 MB" << endl 
 		<< endl;
 }
 
@@ -58,6 +54,7 @@ void parseArgs(int argc, char** argv, Args& arg) {
 
 	if(argc < 2){ print_help(argv); exit(1); }
 
+	// read and parse input parameters
 	for(size_t i=1;i<argc;++i)
 	{
 		string param = argv[i];
@@ -70,63 +67,52 @@ void parseArgs(int argc, char** argv, Args& arg) {
 		{
 			arg.rlbwt = true;
 		}
-		else if( param == "-z" or param == "--base" )
+		else if( param == "-f" or param == "--fast" )
 		{
-			i++;
-			arg.z = atoi( argv[i] );
-			if( arg.z < 1 or arg.z > 255 )
-			{
-					cerr << "The KR-hasing base range is [1,255]." << endl;
-					exit(1);
-			}
+			arg.fast = true;
 		}
 		else if( param == "-t" or param == "--threads" )
 		{
 			i++;
 			arg.threads = atoi( argv[i] );
-			if( arg.registers < 2 )
+			if( arg.threads == 0 )
 			{
-					cerr << "Select at least 2 threads." << endl;
-					exit(1);
+				// try detecting number of threads
+				const auto processor_count = std::thread::hardware_concurrency();
+				if( processor_count == 0 ){ cerr << "Could not detect concurrent threads number." << endl; }
+				else
+				{
+					cout << "Concurrent threads detected = " << processor_count << endl;
+					arg.threads = processor_count;
+				}
 			}
+		}
+		else if( param == "-b" or param == "--buffer-size" )
+		{
+			i++;
+			arg.buffer = stoull( argv[i] );
 		}
 		else if( param == "-u" or param == "--U" )
 		{
 			i++;
-			arg.u = atoi( argv[i] );
+			arg.u = stoull( argv[i] );
+			arg.u = ceil(log2(arg.u));
 		}
 		else if( param == "-p" or param == "--precision" )
 		{
 			i++;
 			arg.precision = atoi( argv[i] );
-			if( arg.precision < 1 and arg.precision > 7 )
+			if( arg.precision < 1 and arg.precision > 5 )
 			{
-				cerr << "Precision has to be in the range [1,7]." << endl;
+				cerr << "Precision has to be in the range [1,5]." << endl;
 				exit(1);
 			}
 		}
-		/*
-		else if( param == "-r" or param == "--registers" )
+		else if( param == "-e" or param == "--prime" )
 		{
 			i++;
-			arg.registers = atoi( argv[i] );
-			if( arg.registers < 4 or arg.registers > 30 )
-			{
-					cerr << "The number of register range is [4,30]." << endl;
-					exit(1);
-			}
+			arg.prime = stoull( argv[i] );
 		}
-		else if( param == "-e" or param == "--E" )
-		{
-			i++;
-			arg.E = atoi( argv[i] );
-		}
-		else if( param == "-a" or param == "--A" )
-		{
-			i++;
-			arg.a = atof( argv[i] );
-		}
-		*/
 		else if( param == "-d" or param == "--delta" )
 		{
 			i++;
@@ -147,7 +133,7 @@ void parseArgs(int argc, char** argv, Args& arg) {
 			arg.sketch2 = string( argv[i] );
 			arg.merge = true;
 		}
-		else if( param == "-o" or param == "--output" )
+		else if( param == "-o" or param == "--output-file" )
 		{
 			i++;
 			arg.outfile = string( argv[i] );
@@ -173,10 +159,11 @@ void parseArgs(int argc, char** argv, Args& arg) {
 			cerr << "Please select one option out of stream|delta|merge|ncd" << endl;
 			exit(1);
 	}
-	// check base z
-	if( arg.z == 0 )
+	// check fast mode
+	if(arg.fast)
 	{
-		arg.z = random(1,255);
+		arg.prime = (uint64_t(1)<<54) + (uint64_t(1)<<7) + 31;
+		arg.precision = 1;
 	}
 	// set parameters from the selected configurations
 	arg.e = conf_list[arg.precision-1]._e;
@@ -185,17 +172,17 @@ void parseArgs(int argc, char** argv, Args& arg) {
 	arg.precision = conf_list[arg.precision-1]._p;
 }
 
-void extend_window_mt(sketch<> * s, vector<uint8_t> * buffer, uint64_t i)
+void extend_window_mt(sketch<> * s, vector<uint8_t> * buffer, uint64_t i, bool f=false)
 {
 	for(uint64_t j=0;j<i;++j)
-		s->extend_window((*buffer)[j]);
+		s->extend_window((*buffer)[j],f);
 }
 
-void extend_rlbwt_mt(sketch<> * s, vector<uint8_t> * buffer, uint64_t i)
+void extend_rlbwt_mt(sketch<> * s, vector<uint8_t> * buffer, uint64_t i, bool f=false)
 {
 	for(uint64_t j=0;j<i;++j)
 	{
-		s->extend_rlbwt((*buffer)[j]);
+		s->extend_rlbwt((*buffer)[j],f);
 		if(s->is_rlbwt_dropped())
 			break;
 	}
@@ -215,14 +202,19 @@ uint64_t loadBuffer(vector<uint8_t>& buffer, const uint64_t K)
 	return i;
 }
 
-void print_delta(sketch<>& s)
+void print_delta(sketch<>& s, string outfile)
 {
 	cout << "Stream length = " << s.stream_length() << endl;
-	cout << "delta = " << s.estimate_delta() << endl;
+	auto res = s.estimate_delta_argmax();
+	cout << "delta = " << get<0>(res) << endl;
+	cout << "argmax_k = " << get<1>(res) << endl;
 	
-	ofstream output("delta.txt");
-	output << s.estimate_delta();
-	output.close();
+	if( outfile != string() )
+	{
+		ofstream output(outfile + "delta");
+		output << get<0>(res) << '\n' << get<1>(res);
+		output.close();
+	}
 }
 
 void print_ncd(sketch<>& s, double mind, double maxd)
@@ -246,7 +238,7 @@ void compute_delta(string sketch_path)
 {
 	sketch<> s;
 	load_sketch(s,sketch_path);
-	print_delta(s);
+	print_delta(s,sketch_path);
 }
 
 void merge_sketches(string sketch_path1, string sketch_path2, string outfile, bool ncd = false)
@@ -285,24 +277,35 @@ void merge_sketches(string sketch_path1, string sketch_path2, string outfile, bo
 */
 void stream_delta(Args& arg){
 
-	//sketch<HyperLogLog> s(324289893284831);	
-	sketch<> s(arg);
+	// compute prime number
+	uint64_t q;
+	if( !arg.fast and arg.prime==0 )
+	{
+		std::random_device rand_dev;
+		uint64_t seed = uniform_random(uint64_t(0),(uint64_t(1)<<63)+((uint64_t(1)<<63)-1),rand_dev());
+		q = compute_random_prime(seed);
+	}
+    else{ q = arg.prime; }
+	cout << "Selected prime number, q = " << q << endl;
+	sketch<> s(arg,q);
 
 	uint64_t i = 0;
 	while(cin){
 		uint8_t c = cin.get();
 		if(cin)
 		{
-			s.extend_window(c);
+			// extend sketch window
+			s.extend_window(c,arg.fast);
+			// extend RLBWT
 			if(arg.rlbwt and !s.is_rlbwt_dropped())
 			{
-				s.extend_rlbwt(c,true);
+				s.extend_rlbwt(c,true,arg.fast);
 			}
 			i++;
 		}
 	}
 	// print delta stats
-	print_delta(s);
+	print_delta(s,arg.outfile);
 	// store sketches if needed
 	if(arg.outfile != string())
 	{
@@ -322,13 +325,24 @@ void stream_delta_parallel(Args& arg){
 	vector<sketch<>> sketch_list;
 	sketch<> rlbwt_s;
 
-	const uint32_t K = 1000000;
+	// initialize stream buffer
+	const uint32_t K = arg.buffer * 1000000;
 	vector<uint8_t> buffer(K,0);
+	// compute prime number
+	uint64_t q;
+	if( !arg.fast and arg.prime==0 )
+	{
+		std::random_device rand_dev;
+		uint64_t seed = uniform_random(uint64_t(0),(uint64_t(1)<<63)+((uint64_t(1)<<63)-1),rand_dev());
+		q = compute_random_prime(seed);
+	}
+	else{ q = arg.prime; }
+	cout << "Selected prime number, q = " << q << endl;
 
 	vector<uint64_t> sampled_lengths, rlbwt_lengths;
 	//sample_kmer_lengths
 	kmer_lengths_sampling(sampled_lengths,arg.e,arg.u,arg.a,arg.precision);
-	uint64_t window_size = compute_window_size(arg.u);
+	uint64_t window_size = compute_window_size(arg.u)*8;
 	uint64_t no_sampled = sampled_lengths.size();
 
 	uint64_t i = 0;
@@ -377,7 +391,7 @@ void stream_delta_parallel(Args& arg){
 	if(arg.rlbwt)
 	{
 		rlbwt_lengths.resize(sampled_lengths.size()-i);
-		//l = new vector<uint64_t>(sampled_lengths.size()-i,0);
+		// create vector of RLBWT lengths
 		for(uint64_t j=i;j<sampled_lengths.size();++j)
 		{
 			rlbwt_lengths[j-i] = sampled_lengths[j];
@@ -388,7 +402,6 @@ void stream_delta_parallel(Args& arg){
 	if(arg.rlbwt) cout << "Run-length BWT sampled lengths: " << rlbwt_lengths.size() << endl;
 	cout << "Number of threads: " << threads << endl;
 	cout << "Lengths per thread: " << no_k_thread << endl;
-	//cout << "base z: " << (int)arg.z << endl;
 
 	// init threads and sketches
 	sketch_list.resize(threads);
@@ -397,10 +410,9 @@ void stream_delta_parallel(Args& arg){
 	{
 		// init ith sketch
 		uint64_t curr_window = (*length_lists[i])[length_lists[i]->size()-1];
-		//uint64_t curr_window = window_size;
-		sketch_list[i] = sketch<>(arg,curr_window,length_lists[i]);
+		sketch_list[i] = sketch<>(arg,curr_window,length_lists[i],q);
 	}
-	if(arg.rlbwt){ rlbwt_s = sketch<>(arg,0,&rlbwt_lengths); }
+	if(arg.rlbwt){ rlbwt_s = sketch<>(arg,0,&rlbwt_lengths,q); }
 
 	// main execuction
 	i = 0;
@@ -410,12 +422,12 @@ void stream_delta_parallel(Args& arg){
 		if( loadedChars == 0 ){ break; }
 		for(uint64_t j=0;j<threads;++j)
 		{
-			thread_list[j] = thread(extend_window_mt, &sketch_list[j], &buffer, loadedChars);
+			thread_list[j] = thread(extend_window_mt, &sketch_list[j], &buffer, loadedChars, arg.fast);
 		}
 
 		if(arg.rlbwt and !rlbwt_s.is_rlbwt_dropped())
 		{
-			thread t = thread(extend_rlbwt_mt, &rlbwt_s, &buffer, loadedChars);
+			thread t = thread(extend_rlbwt_mt, &rlbwt_s, &buffer, loadedChars, arg.fast);
 			t.join();
 		}
 
@@ -438,7 +450,7 @@ void stream_delta_parallel(Args& arg){
 	sketch_list.resize(1); sketch_list.shrink_to_fit();
 
 	// estimate delta
-	print_delta(sketch_list[0]);
+	print_delta(sketch_list[0],arg.outfile);
 
 	// store sketches if needed
 	if(arg.outfile != string())
@@ -457,26 +469,26 @@ int main(int argc, char* argv[]){
 
 	if(arg.stream)
 	{
-			if( arg.threads > 1 )
-			{
-					stream_delta_parallel(arg);
-			}
-			else
-			{
-					stream_delta(arg);
-			}
+		if( arg.threads > 1 )
+		{
+				stream_delta_parallel(arg);
+		}
+		else
+		{
+				stream_delta(arg);
+		}
 	}
 	else if(arg.delta)
 	{
-			compute_delta(arg.sketch1);
+		compute_delta(arg.sketch1);
 	}
 	else if(arg.merge)
 	{
-			merge_sketches(arg.sketch1,arg.sketch2,arg.outfile);
+		merge_sketches(arg.sketch1,arg.sketch2,arg.outfile);
 	}
 	else if(arg.ncd)
 	{
-			merge_sketches(arg.sketch1,arg.sketch2,arg.outfile,true);
+		merge_sketches(arg.sketch1,arg.sketch2,arg.outfile,true);
 	}
 
     return 0;
