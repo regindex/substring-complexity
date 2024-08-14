@@ -1,6 +1,6 @@
 Compute/approximate the substring complexity and related measures
 ===============
-Author: Nicola Prezza (nicola.prezza@gmail.com)
+Author: Nicola Prezza (nicola.prezza@gmail.com), Davide Cenzato
 
 ### Brief description
 
