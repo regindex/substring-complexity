@@ -10,7 +10,9 @@ The tool `delta` computes the exact measure and outputs also related statistics,
 
 *Tomasz Kociumaka, Gonzalo Navarro, Nicola Prezza, Toward a Definitive Compressibility Measure for Repetitive Sequences. IEEE Trans. Inf. Theory 69(4): 2074-2092 (2023)*
 
-The tool `delta-stream` computes an approximation of $\delta$ using sublinear working space. Paper: work in progress.
+The tool `delta-stream` computes an approximation of $\delta$ using sublinear working space. Based on: 
+
+*Ruben Becker, Matteo Canton, Davide Cenzato, Sung-Hwan Kim, Bojana Kodric, and Nicola Prezza. Sketching and Streaming for Dictionary Compression. Proceedings of the Data Compression Conference 2024.*
  
 ### Download
 
