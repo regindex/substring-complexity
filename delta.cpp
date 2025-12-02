@@ -54,7 +54,7 @@ int main(int argc, char* argv[])
 
     for(uint64_t i=1;i<dk.size();++i){
 
-    	dk_value = dk_value + dk[i] - 1;
+    	dk_value = dk_value + dk[i] - (i>1);
 		delta_i = dk_value/i;
 
 		if(dk_value < lcp.size() - i) 
